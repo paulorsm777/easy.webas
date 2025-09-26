@@ -1,0 +1,128 @@
+{
+  "examples": [
+    {
+      "name": "Google Search Test",
+      "description": "Busca no Google e extrai resultados",
+      "payload": {
+        "script": "async def main():\n    await page.goto('https://www.google.com')\n    \n    # Aceitar cookies se aparecer\n    try:\n        accept_btn = page.locator('button:has-text(\"Aceitar tudo\"), button:has-text(\"Accept all\")')\n        if await accept_btn.count() > 0:\n            await accept_btn.first.click()\n            await page.wait_for_timeout(1000)\n    except:\n        pass\n    \n    # Buscar\n    search_box = page.locator('input[name=\"q\"], textarea[name=\"q\"]')\n    await search_box.fill('playwright automation')\n    await search_box.press('Enter')\n    \n    # Aguardar e extrair resultados\n    await page.wait_for_selector('h3', timeout=10000)\n    \n    results = []\n    titles = page.locator('h3')\n    count = await titles.count()\n    \n    for i in range(min(5, count)):\n        try:\n            title = await titles.nth(i).inner_text()\n            results.append(title)\n        except:\n            continue\n    \n    return {\n        'search_term': 'playwright automation',\n        'results_count': len(results),\n        'results': results,\n        'page_title': await page.title()\n    }",
+        "timeout": 30,
+        "priority": 3,
+        "tags": ["google", "search", "demo"],
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      }
+    },
+    {
+      "name": "HTTP Form Test",
+      "description": "Preenche e submete formulário HTTP",
+      "payload": {
+        "script": "async def main():\n    await page.goto('https://httpbin.org/forms/post')\n    \n    # Preencher formulário\n    await page.fill('input[name=\"custname\"]', 'Teste Playwright')\n    await page.fill('input[name=\"custtel\"]', '+55 11 99999-9999')\n    await page.fill('input[name=\"custemail\"]', 'teste@exemplo.com')\n    \n    # Selecionar opções\n    await page.check('input[value=\"large\"]')\n    await page.check('input[value=\"cheese\"]')\n    \n    # Comentários\n    await page.fill('textarea[name=\"comments\"]', 'Teste automatizado')\n    \n    # Submeter\n    await page.click('input[type=\"submit\"]')\n    await page.wait_for_load_state('networkidle')\n    \n    # Extrair resposta\n    response_text = await page.text_content('body')\n    \n    return {\n        'form_submitted': True,\n        'response_preview': response_text[:300],\n        'success': 'form' in response_text.lower()\n    }",
+        "timeout": 25,
+        "priority": 2,
+        "tags": ["form", "httpbin", "test"],
+        "webhook_url": "https://webhook.site/unique-id"
+      }
+    },
+    {
+      "name": "JSON API Test",
+      "description": "Testa API JSON e extrai dados",
+      "payload": {
+        "script": "async def main():\n    import json\n    \n    # Testar endpoint JSON\n    await page.goto('https://httpbin.org/json')\n    \n    # Extrair conteúdo JSON\n    content = await page.text_content('pre')\n    \n    try:\n        data = json.loads(content)\n        \n        return {\n            'test_type': 'json_api',\n            'success': True,\n            'data_keys': list(data.keys()),\n            'slideshow_title': data.get('slideshow', {}).get('title'),\n            'slides_count': len(data.get('slideshow', {}).get('slides', [])),\n            'url': page.url\n        }\n    except Exception as e:\n        return {\n            'test_type': 'json_api',\n            'success': False,\n            'error': str(e),\n            'raw_content': content[:200]\n        }",
+        "timeout": 20,
+        "priority": 1,
+        "tags": ["json", "api", "simple"]
+      }
+    },
+    {
+      "name": "Multi-page Navigation",
+      "description": "Navega por múltiplas páginas e coleta dados",
+      "payload": {
+        "script": "async def main():\n    pages_data = []\n    \n    urls = [\n        'https://httpbin.org/get',\n        'https://httpbin.org/user-agent',\n        'https://httpbin.org/headers'\n    ]\n    \n    for url in urls:\n        try:\n            await page.goto(url)\n            await page.wait_for_load_state('networkidle')\n            \n            title = await page.title()\n            content = await page.text_content('body')\n            \n            pages_data.append({\n                'url': url,\n                'title': title,\n                'content_length': len(content),\n                'success': True\n            })\n            \n        except Exception as e:\n            pages_data.append({\n                'url': url,\n                'error': str(e),\n                'success': False\n            })\n    \n    return {\n        'test_type': 'multi_page_navigation',\n        'pages_visited': len(urls),\n        'successful_loads': len([p for p in pages_data if p['success']]),\n        'data': pages_data\n    }",
+        "timeout": 45,
+        "priority": 4,
+        "tags": ["navigation", "multi-page", "complex"]
+      }
+    },
+    {
+      "name": "Quick Validation Test",
+      "description": "Teste rápido para validação do sistema",
+      "payload": {
+        "script": "async def main():\n    await page.goto('https://httpbin.org/get')\n    \n    title = await page.title()\n    url = page.url\n    content = await page.text_content('body')\n    \n    return {\n        'test': 'quick_validation',\n        'title': title,\n        'url': url,\n        'content_preview': content[:100],\n        'success': True,\n        'timestamp': '2024-01-15T10:30:00Z'\n    }",
+        "timeout": 15,
+        "priority": 5,
+        "tags": ["quick", "validation"]
+      }
+    },
+    {
+      "name": "Error Handling Test",
+      "description": "Testa tratamento de erros e timeout",
+      "payload": {
+        "script": "async def main():\n    try:\n        # Tentar acessar URL inválida primeiro\n        await page.goto('https://site-inexistente-12345.com', timeout=5000)\n        return {'error_test': 'failed', 'reason': 'should_have_failed'}\n    except:\n        # Isso deve falhar, então vamos para um site válido\n        await page.goto('https://httpbin.org/delay/1')\n        \n        title = await page.title()\n        \n        return {\n            'error_test': 'passed',\n            'fallback_success': True,\n            'title': title,\n            'message': 'Error handling working correctly'\n        }",
+        "timeout": 30,
+        "priority": 2,
+        "tags": ["error", "handling", "timeout"]
+      }
+    }
+  ],
+  "curl_examples": [
+    {
+      "name": "Execute Script via cURL",
+      "command": "curl -X POST 'http://localhost:8000/execute' \\\n  -H 'Authorization: Bearer admin-super-secret-key-2024' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"script\": \"async def main():\\n    await page.goto(\\\"https://httpbin.org/get\\\")\\n    return await page.title()\",\n    \"timeout\": 30,\n    \"priority\": 3,\n    \"tags\": [\"curl\", \"test\"]\n  }'"
+    },
+    {
+      "name": "Validate Script via cURL",
+      "command": "curl -X POST 'http://localhost:8000/validate' \\\n  -H 'Authorization: Bearer admin-super-secret-key-2024' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"script\": \"async def main():\\n    return \\\"Hello World\\\"\",\n    \"timeout\": 10\n  }'"
+    },
+    {
+      "name": "Get Queue Status via cURL",
+      "command": "curl -X GET 'http://localhost:8000/queue/status' \\\n  -H 'Authorization: Bearer admin-super-secret-key-2024'"
+    },
+    {
+      "name": "Health Check via cURL",
+      "command": "curl -X GET 'http://localhost:8000/health'"
+    }
+  ],
+  "postman_collection": {
+    "info": {
+      "name": "Playwright Automation Server",
+      "description": "Collection para testar o servidor Playwright"
+    },
+    "auth": {
+      "type": "bearer",
+      "bearer": [
+        {
+          "key": "token",
+          "value": "admin-super-secret-key-2024"
+        }
+      ]
+    },
+    "item": [
+      {
+        "name": "Execute Script",
+        "request": {
+          "method": "POST",
+          "header": [],
+          "body": {
+            "mode": "raw",
+            "raw": "{\n  \"script\": \"async def main():\\n    await page.goto('https://httpbin.org/get')\\n    return await page.title()\",\n  \"timeout\": 30,\n  \"priority\": 3,\n  \"tags\": [\"postman\", \"test\"]\n}",
+            "options": {
+              "raw": {
+                "language": "json"
+              }
+            }
+          },
+          "url": {
+            "raw": "{{base_url}}/execute",
+            "host": ["{{base_url}}"],
+            "path": ["execute"]
+          }
+        }
+      }
+    ],
+    "variable": [
+      {
+        "key": "base_url",
+        "value": "http://localhost:8000"
+      }
+    ]
+  }
+}
