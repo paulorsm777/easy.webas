@@ -1,0 +1,110 @@
+version: "3.8"
+
+services:
+  playwright-server:
+    build: .
+    container_name: playwright-automation-server
+    ports:
+      - "8000:8000"
+    environment:
+      # Load from .env file
+      - ADMIN_API_KEY=${ADMIN_API_KEY}
+      - MAX_CONCURRENT_EXECUTIONS=${MAX_CONCURRENT_EXECUTIONS:-10}
+      - MAX_QUEUE_SIZE=${MAX_QUEUE_SIZE:-100}
+      - MAX_SCRIPT_SIZE=${MAX_SCRIPT_SIZE:-50000}
+      - MAX_EXECUTION_TIME=${MAX_EXECUTION_TIME:-300}
+      - VIDEO_RETENTION_DAYS=${VIDEO_RETENTION_DAYS:-7}
+      - VIDEO_WIDTH=${VIDEO_WIDTH:-1280}
+      - VIDEO_HEIGHT=${VIDEO_HEIGHT:-720}
+      - GLOBAL_RATE_LIMIT_PER_MINUTE=${GLOBAL_RATE_LIMIT_PER_MINUTE:-60}
+      - PER_KEY_RATE_LIMIT_PER_MINUTE=${PER_KEY_RATE_LIMIT_PER_MINUTE:-30}
+      - BROWSER_POOL_SIZE=${BROWSER_POOL_SIZE:-10}
+      - BROWSER_WARMUP_PAGES=${BROWSER_WARMUP_PAGES:-3}
+      - DASHBOARD_REFRESH_INTERVAL=${DASHBOARD_REFRESH_INTERVAL:-5}
+      - MAX_WEBHOOK_RETRIES=${MAX_WEBHOOK_RETRIES:-3}
+      - WEBHOOK_TIMEOUT=${WEBHOOK_TIMEOUT:-10}
+      - ALLOWED_DOMAINS=${ALLOWED_DOMAINS:-*}
+      - ENABLE_CLEANUP_SCHEDULER=true
+    volumes:
+      # Persist data between container restarts
+      - ./data:/app/data
+      # Shared memory for browser processes
+      - /dev/shm:/dev/shm
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/quick"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          # Limit resources to prevent container from consuming too much
+          memory: 2G
+          cpus: "2.0"
+        reservations:
+          memory: 512M
+          cpus: "0.5"
+    security_opt:
+      # Required for browser sandboxing
+      - seccomp:unconfined
+    shm_size: 2gb
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.playwright.rule=Host(`playwright.localhost`)"
+      - "traefik.http.services.playwright.loadbalancer.server.port=8000"
+
+  # Optional: Traefik reverse proxy for production
+  # traefik:
+  #   image: traefik:v2.10
+  #   container_name: traefik
+  #   command:
+  #     - "--api.insecure=true"
+  #     - "--providers.docker=true"
+  #     - "--providers.docker.exposedbydefault=false"
+  #     - "--entrypoints.web.address=:80"
+  #   ports:
+  #     - "80:80"
+  #     - "8080:8080"
+  #   volumes:
+  #     - "/var/run/docker.sock:/var/run/docker.sock:ro"
+  #   restart: unless-stopped
+
+  # Optional: Prometheus for metrics collection
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: prometheus
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.path=/prometheus'
+  #     - '--web.console.libraries=/etc/prometheus/console_libraries'
+  #     - '--web.console.templates=/etc/prometheus/consoles'
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - playwright-server
+
+  # Optional: Grafana for metrics visualization
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   container_name: grafana
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - GF_SECURITY_ADMIN_PASSWORD=admin
+  #   volumes:
+  #     - grafana-storage:/var/lib/grafana
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - prometheus
+# volumes:
+#   grafana-storage:

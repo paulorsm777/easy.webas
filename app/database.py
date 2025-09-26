@@ -16,6 +16,10 @@ class DatabaseManager:
         self.db_path = db_path or settings.database_path
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
+    def get_connection(self):
+        """Get database connection context manager"""
+        return aiosqlite.connect(self.db_path)
+
     async def init_database(self):
         """Initialize database with all required tables"""
         async with aiosqlite.connect(self.db_path) as db:
