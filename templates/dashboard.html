@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Playwright Automation Server - Dashboard</title>
+        <link
+            href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css"
+            rel="stylesheet"
+        />
+        <link
+            href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+            rel="stylesheet"
+        />
+        <link href="/static/style.css" rel="stylesheet" />
+    </head>
+    <body>
+        <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+            <div class="container">
+                <a class="navbar-brand" href="#">
+                    <i class="fas fa-robot me-2"></i>
+                    Playwright Server
+                </a>
+                <div class="navbar-nav ms-auto">
+                    <span class="navbar-text me-3">
+                        <i class="fas fa-user me-1"></i>
+                        {{ api_key.name }}
+                    </span>
+                    <span class="navbar-text">
+                        <span
+                            class="badge bg-{{ 'success' if data.system.status == 'healthy' else 'warning' if data.system.status == 'degraded' else 'danger' }}"
+                        >
+                            {{ data.system.status.title() }}
+                        </span>
+                    </span>
+                </div>
+            </div>
+        </nav>
+
+        <div class="container mt-4">
+            <!-- System Overview -->
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <div class="card text-white bg-primary">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between">
+                                <div>
+                                    <h4 class="card-title">
+                                        {{ data.queue.active_executions }}
+                                    </h4>
+                                    <p class="card-text">Active Executions</p>
+                                </div>
+                                <div class="align-self-center">
+                                    <i class="fas fa-play-circle fa-2x"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card text-white bg-info">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between">
+                                <div>
+                                    <h4 class="card-title">
+                                        {{ data.queue.size }}
+                                    </h4>
+                                    <p class="card-text">Queue Size</p>
+                                </div>
+                                <div class="align-self-center">
+                                    <i class="fas fa-list fa-2x"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card text-white bg-success">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between">
+                                <div>
+                                    <h4 class="card-title">
+                                        {{ data.browser_pool.available }}/{{
+                                        data.browser_pool.total }}
+                                    </h4>
+                                    <p class="card-text">Available Browsers</p>
+                                </div>
+                                <div class="align-self-center">
+                                    <i class="fas fa-window-maximize fa-2x"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card text-white bg-warning">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between">
+                                <div>
+                                    <h4 class="card-title">
+                                        {{
+                                        "%.1f"|format(data.system.memory_usage_mb)
+                                        }}MB
+                                    </h4>
+                                    <p class="card-text">Memory Usage</p>
+                                </div>
+                                <div class="align-self-center">
+                                    <i class="fas fa-memory fa-2x"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Row -->
+            <div class="row mb-4">
+                <div class="col-md-8">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="card-title">
+                                <i class="fas fa-chart-line me-2"></i>
+                                Execution Trends (Last 24 Hours)
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <canvas id="executionChart" height="100"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="card-title">
+                                <i class="fas fa-tachometer-alt me-2"></i>
+                                System Performance
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <label class="form-label"
+                                    >CPU Usage: {{
+                                    "%.1f"|format(data.system.cpu_usage_percent)
+                                    }}%</label
+                                >
+                                <div class="progress">
+                                    <div
+                                        class="progress-bar bg-{{ 'danger' if data.system.cpu_usage_percent > 80 else 'warning' if data.system.cpu_usage_percent > 60 else 'success' }}"
+                                        style="width: {{ data.system.cpu_usage_percent }}%"
+                                    ></div>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label"
+                                    >Memory: {{
+                                    "%.1f"|format(data.system.memory_usage_mb)
+                                    }}MB</label
+                                >
+                                <div class="progress">
+                                    <div
+                                        class="progress-bar bg-{{ 'danger' if data.system.memory_usage_mb > 1500 else 'warning' if data.system.memory_usage_mb > 1000 else 'success' }}"
+                                        style="width: {{ (data.system.memory_usage_mb / 2000 * 100)|min(100) }}%"
+                                    ></div>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label"
+                                    >Storage: {{
+                                    "%.1f"|format(data.storage.total_size_gb)
+                                    }}GB</label
+                                >
+                                <div class="progress">
+                                    <div
+                                        class="progress-bar bg-info"
+                                        style="width: {{ (data.storage.total_size_gb / 10 * 100)|min(100) }}%"
+                                    ></div>
+                                </div>
+                            </div>
+                            <div class="text-muted small">
+                                Uptime: {{ (data.system.uptime_seconds /
+                                3600)|round(1) }} hours
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Activity -->
+            <div class="row mb-4">
+                <div class="col-md-8">
+                    <div class="card">
+                        <div
+                            class="card-header d-flex justify-content-between align-items-center"
+                        >
+                            <h5 class="card-title mb-0">
+                                <i class="fas fa-history me-2"></i>
+                                Recent Executions
+                            </h5>
+                            <small class="text-muted">
+                                Success Rate: {{ data.executions.success_rate
+                                }}%
+                            </small>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>Request ID</th>
+                                            <th>Status</th>
+                                            <th>Duration</th>
+                                            <th>Created</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for execution in
+                                        data.executions.recent %}
+                                        <tr>
+                                            <td>
+                                                <code class="small"
+                                                    >{{ execution.request_id[:8]
+                                                    }}...</code
+                                                >
+                                            </td>
+                                            <td>
+                                                <span
+                                                    class="badge bg-{{ 'success' if execution.status == 'completed' else 'danger' if execution.status == 'failed' else 'warning' if execution.status == 'running' else 'secondary' }}"
+                                                >
+                                                    {{ execution.status }}
+                                                </span>
+                                            </td>
+                                            <td>
+                                                {% if execution.execution_time
+                                                %} {{
+                                                "%.1f"|format(execution.execution_time)
+                                                }}s {% else %} - {% endif %}
+                                            </td>
+                                            <td class="small text-muted">
+                                                {{ execution.created_at }}
+                                            </td>
+                                            <td>
+                                                {% if execution.has_video %}
+                                                <a
+                                                    href="{{ execution.video_url }}"
+                                                    class="btn btn-sm btn-outline-primary"
+                                                    target="_blank"
+                                                >
+                                                    <i class="fas fa-video"></i>
+                                                </a>
+                                                {% endif %} {% if
+                                                execution.error_message %}
+                                                <button
+                                                    class="btn btn-sm btn-outline-danger"
+                                                    data-bs-toggle="tooltip"
+                                                    title="{{ execution.error_message }}"
+                                                >
+                                                    <i
+                                                        class="fas fa-exclamation-triangle"
+                                                    ></i>
+                                                </button>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="card-title">
+                                <i class="fas fa-video me-2"></i>
+                                Video Storage
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between mb-2">
+                                <span>Total Videos:</span>
+                                <span class="fw-bold"
+                                    >{{ data.storage.total_videos }}</span
+                                >
+                            </div>
+                            <div class="d-flex justify-content-between mb-2">
+                                <span>Storage Used:</span>
+                                <span class="fw-bold"
+                                    >{{
+                                    "%.2f"|format(data.storage.total_size_gb) }}
+                                    GB</span
+                                >
+                            </div>
+                            <div class="d-flex justify-content-between mb-3">
+                                <span>Average Size:</span>
+                                <span class="fw-bold">
+                                    {% if data.storage.total_videos > 0 %} {{
+                                    "%.1f"|format(data.storage.total_size_mb /
+                                    data.storage.total_videos) }} MB {% else %}
+                                    0 MB {% endif %}
+                                </span>
+                            </div>
+                            <hr />
+                            <div class="card">
+                                <div class="card-header">
+                                    <h6 class="card-title">
+                                        <i class="fas fa-key me-2"></i>
+                                        API Key Info
+                                    </h6>
+                                </div>
+                                <div class="card-body">
+                                    <div
+                                        class="d-flex justify-content-between mb-2"
+                                    >
+                                        <span>Requests Today:</span>
+                                        <span class="fw-bold"
+                                            >{{ data.api_key.requests_today
+                                            }}</span
+                                        >
+                                    </div>
+                                    <div
+                                        class="d-flex justify-content-between mb-2"
+                                    >
+                                        <span>Rate Limit:</span>
+                                        <span class="fw-bold"
+                                            >{{ data.api_key.rate_limit
+                                            }}/min</span
+                                        >
+                                    </div>
+                                    <div class="d-flex justify-content-between">
+                                        <span>Last Used:</span>
+                                        <span class="fw-bold small">
+                                            {% if data.api_key.last_used %} {{
+                                            data.api_key.last_used }} {% else %}
+                                            Never {% endif %}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Queue Status -->
+            {% if data.queue.recent_items %}
+            <div class="row">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="card-title">
+                                <i class="fas fa-clock me-2"></i>
+                                Current Queue ({{ data.queue.size }} items)
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-sm">
+                                    <thead>
+                                        <tr>
+                                            <th>Position</th>
+                                            <th>Request ID</th>
+                                            <th>Priority</th>
+                                            <th>Wait Time</th>
+                                            <th>Tags</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for item in data.queue.recent_items
+                                        %}
+                                        <tr>
+                                            <td>{{ loop.index }}</td>
+                                            <td>
+                                                <code class="small"
+                                                    >{{ item.request_id[:8]
+                                                    }}...</code
+                                                >
+                                            </td>
+                                            <td>
+                                                <span
+                                                    class="badge bg-{{ 'danger' if item.priority >= 4 else 'warning' if item.priority >= 2 else 'secondary' }}"
+                                                >
+                                                    {{ item.priority }}
+                                                </span>
+                                            </td>
+                                            <td class="small">
+                                                {{ "%.1f"|format(item.wait_time)
+                                                }}s
+                                            </td>
+                                            <td>
+                                                {% for tag in item.tags %}
+                                                <span
+                                                    class="badge bg-light text-dark me-1"
+                                                    >{{ tag }}</span
+                                                >
+                                                {% endfor %}
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Auto-refresh footer -->
+        <div class="fixed-bottom">
+            <div class="container">
+                <div class="row">
+                    <div class="col-12">
+                        <div class="alert alert-light py-2 mb-0">
+                            <small class="text-muted">
+                                <i class="fas fa-sync-alt me-1"></i>
+                                Auto-refreshing every {{ refresh_interval }}
+                                seconds
+                                <span class="ms-3">
+                                    <i class="fas fa-clock me-1"></i>
+                                    Last updated:
+                                    <span id="lastUpdate"
+                                        >{{ data.timestamp }}</span
+                                    >
+                                </span>
+                            </small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script src="/static/dashboard.js"></script>
+
+        <script>
+            // Initialize dashboard with data
+            const dashboardData = {{ data|tojson }};
+            const refreshInterval = {{ refresh_interval }} * 1000;
+
+            // Initialize charts
+            initializeCharts(dashboardData);
+
+            // Auto-refresh
+            setInterval(() => {
+                location.reload();
+            }, refreshInterval);
+
+            // Initialize tooltips
+            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+                return new bootstrap.Tooltip(tooltipTriggerEl);
+            });
+        </script>
+    </body>
+</html>
