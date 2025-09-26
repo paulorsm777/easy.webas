@@ -1,618 +1,415 @@
 from typing import Dict, List, Optional
-from .models import ScriptTemplate
-from .database import db
-from .logger import Logger
+import json
+import aiosqlite
+from app.config import settings
+from app.models import ScriptTemplate
+import structlog
 
-logger = Logger("templates")
+logger = structlog.get_logger()
 
-# Built-in script templates
-BUILT_IN_TEMPLATES = {
-    "google_search": {
-        "name": "google_search",
-        "description": "Busca no Google e retorna os primeiros resultados",
-        "category": "web_scraping",
-        "script_content": '''
+
+class TemplateService:
+    """Service for managing script templates"""
+
+    def __init__(self):
+        self.builtin_templates = {
+            "google_search": {
+                "description": "Busca no Google e retorna resultados",
+                "category": "web_scraping",
+                "script_content": """
 async def main():
-    """
-    Realiza uma busca no Google e retorna os primeiros 5 resultados
-    """
     await page.goto('https://google.com')
-
-    # Aceitar cookies se necessário
-    try:
-        accept_button = page.locator('button:has-text("Accept all"), button:has-text("I agree")')
-        if await accept_button.count() > 0:
-            await accept_button.first.click()
-    except:
-        pass
-
-    # Buscar
-    search_box = page.locator('input[name="q"], textarea[name="q"]')
-    await search_box.fill('playwright automation')
-    await search_box.press('Enter')
-
-    # Aguardar resultados
-    await page.wait_for_selector('.g', timeout=10000)
-
-    # Extrair resultados
-    results = []
-    result_elements = page.locator('.g h3')
-    count = await result_elements.count()
-
-    for i in range(min(5, count)):
-        try:
-            title = await result_elements.nth(i).inner_text()
-            results.append(title)
-        except:
-            continue
-
-    return {
-        'search_term': 'playwright automation',
-        'results_count': len(results),
-        'results': results,
-        'page_title': await page.title()
-    }
-''',
-    },
-    "form_filling": {
-        "name": "form_filling",
-        "description": "Preenche um formulário de exemplo e submete",
-        "category": "automation",
-        "script_content": '''
+    await page.fill('input[name="q"]', 'playwright automation')
+    await page.press('input[name="q"]', 'Enter')
+    await page.wait_for_selector('.g')
+    results = await page.query_selector_all('.g h3')
+    return [await r.inner_text() for r in results[:5]]
+""".strip()
+            },
+            "form_filling": {
+                "description": "Preenche formulário e submete",
+                "category": "automation",
+                "script_content": """
 async def main():
-    """
-    Preenche um formulário de teste no httpbin.org
-    """
     await page.goto('https://httpbin.org/forms/post')
-
-    # Preencher campos
-    await page.fill('input[name="custname"]', 'João Silva')
-    await page.fill('input[name="custtel"]', '11999887766')
-    await page.fill('input[name="custemail"]', 'joao.silva@example.com')
-    await page.fill('textarea[name="comments"]', 'Teste de automação com Playwright')
-
-    # Selecionar tamanho
-    await page.select_option('select[name="size"]', 'large')
-
-    # Marcar topping
-    await page.check('input[name="topping"][value="bacon"]')
-
-    # Submeter formulário
+    await page.fill('input[name="custname"]', 'Test User')
+    await page.fill('input[name="custtel"]', '123456789')
+    await page.fill('input[name="custemail"]', 'test@example.com')
     await page.click('input[type="submit"]')
-
-    # Aguardar resposta
     await page.wait_for_load_state('networkidle')
-
-    # Extrair resposta
-    response_text = await page.text_content('body')
-
-    return {
-        'success': True,
-        'form_data': {
-            'name': 'João Silva',
-            'phone': '11999887766',
-            'email': 'joao.silva@example.com',
-            'size': 'large',
-            'topping': 'bacon'
-        },
-        'response_length': len(response_text),
-        'current_url': page.url
-    }
-''',
-    },
-    "screenshot_capture": {
-        "name": "screenshot_capture",
-        "description": "Navega para uma página e captura informações detalhadas",
-        "category": "testing",
-        "script_content": '''
+    return await page.text_content('body')
+""".strip()
+            },
+            "screenshot_capture": {
+                "description": "Navega e captura informações da página",
+                "category": "testing",
+                "script_content": """
 async def main():
-    """
-    Navega para example.com e coleta informações da página
-    """
     await page.goto('https://example.com')
-
-    # Aguardar carregamento completo
-    await page.wait_for_load_state('networkidle')
-
-    # Coletar informações básicas
     title = await page.title()
-    url = page.url
-    viewport = await page.viewport_size()
+    content = await page.text_content('body')
+    return {
+        'title': title,
+        'content_length': len(content),
+        'url': page.url,
+        'viewport': await page.viewport_size()
+    }
+""".strip()
+            },
+            "e_commerce_product_check": {
+                "description": "Verifica informações de produto em site de e-commerce",
+                "category": "monitoring",
+                "script_content": """
+async def main():
+    # Example: Check product availability and price
+    await page.goto('https://example-shop.com/product/123')
 
-    # Contar elementos
-    links_count = await page.locator('a').count()
-    images_count = await page.locator('img').count()
-    paragraphs_count = await page.locator('p').count()
+    # Wait for product information to load
+    await page.wait_for_selector('.product-info')
 
-    # Extrair texto principal
-    main_content = await page.text_content('body')
+    # Extract product details
+    title = await page.text_content('.product-title')
+    price = await page.text_content('.product-price')
+    availability = await page.text_content('.product-availability')
 
-    # Verificar se há formulários
-    forms_count = await page.locator('form').count()
-
-    # Coletar meta tags
-    meta_description = await page.get_attribute('meta[name="description"]', 'content') or ''
+    # Check if "Add to Cart" button is available
+    add_to_cart = await page.query_selector('.add-to-cart:not([disabled])')
+    in_stock = add_to_cart is not None
 
     return {
-        'page_info': {
-            'title': title,
-            'url': url,
-            'viewport': viewport,
-            'content_length': len(main_content.strip()) if main_content else 0
-        },
-        'elements': {
-            'links': links_count,
-            'images': images_count,
-            'paragraphs': paragraphs_count,
-            'forms': forms_count
-        },
-        'meta': {
-            'description': meta_description
-        },
-        'sample_content': main_content[:200] + '...' if main_content and len(main_content) > 200 else main_content
+        'title': title,
+        'price': price,
+        'availability': availability,
+        'in_stock': in_stock,
+        'timestamp': datetime.now().isoformat()
     }
-''',
-    },
-    "api_testing": {
-        "name": "api_testing",
-        "description": "Testa uma API REST usando o navegador",
-        "category": "testing",
-        "script_content": '''
+""".strip()
+            },
+            "social_media_post": {
+                "description": "Extrai informações de post em rede social",
+                "category": "social_monitoring",
+                "script_content": """
 async def main():
-    """
-    Testa a API do httpbin.org através do navegador
-    """
-    # Testar GET
+    # Example: Extract post information from social media
+    await page.goto('https://example-social.com/post/123')
+
+    # Wait for post to load
+    await page.wait_for_selector('.post-content')
+
+    # Extract post information
+    author = await page.text_content('.post-author')
+    content = await page.text_content('.post-content')
+    likes = await page.text_content('.like-count')
+    comments = await page.text_content('.comment-count')
+    timestamp = await page.text_content('.post-timestamp')
+
+    return {
+        'author': author,
+        'content': content,
+        'likes': likes,
+        'comments': comments,
+        'timestamp': timestamp,
+        'extracted_at': datetime.now().isoformat()
+    }
+""".strip()
+            },
+            "api_endpoint_test": {
+                "description": "Testa endpoint de API através do navegador",
+                "category": "api_testing",
+                "script_content": """
+async def main():
+    # Test API endpoint through browser (useful for authentication flows)
     await page.goto('https://httpbin.org/json')
 
-    # Extrair resposta JSON
-    json_response = await page.text_content('pre')
+    # Get response content
+    content = await page.text_content('pre')
 
-    # Testar página de IP
-    await page.goto('https://httpbin.org/ip')
-    ip_response = await page.text_content('pre')
+    # Parse JSON response
+    try:
+        response_data = json.loads(content)
+    except json.JSONDecodeError:
+        response_data = {"error": "Invalid JSON response", "raw_content": content}
 
-    # Testar user-agent
-    await page.goto('https://httpbin.org/user-agent')
-    ua_response = await page.text_content('pre')
+    # Additional checks
+    status_check = await page.evaluate('''() => {
+        return {
+            status: window.performance.getEntriesByType('navigation')[0].responseStatus || 200,
+            loadTime: window.performance.timing.loadEventEnd - window.performance.timing.navigationStart
+        }
+    }''')
 
     return {
-        'tests': {
-            'json_endpoint': {
-                'url': 'https://httpbin.org/json',
-                'response_length': len(json_response) if json_response else 0,
-                'success': bool(json_response and 'slideshow' in json_response)
+        'response_data': response_data,
+        'status': status_check['status'],
+        'load_time_ms': status_check['loadTime'],
+        'url': page.url,
+        'timestamp': datetime.now().isoformat()
+    }
+""".strip()
             },
-            'ip_endpoint': {
-                'url': 'https://httpbin.org/ip',
-                'response_length': len(ip_response) if ip_response else 0,
-                'success': bool(ip_response and 'origin' in ip_response)
+            "login_and_navigate": {
+                "description": "Faz login e navega para página específica",
+                "category": "authentication",
+                "script_content": """
+async def main():
+    # Example login flow (customize for your needs)
+    await page.goto('https://example.com/login')
+
+    # Fill login form
+    await page.fill('input[name="username"]', 'your_username')
+    await page.fill('input[name="password"]', 'your_password')
+    await page.click('button[type="submit"]')
+
+    # Wait for login to complete
+    await page.wait_for_url('**/dashboard*')  # Adjust URL pattern as needed
+
+    # Navigate to specific page after login
+    await page.goto('https://example.com/protected-page')
+    await page.wait_for_load_state('networkidle')
+
+    # Extract information from protected page
+    title = await page.title()
+    user_info = await page.text_content('.user-info')
+
+    return {
+        'title': title,
+        'user_info': user_info,
+        'login_successful': True,
+        'current_url': page.url,
+        'timestamp': datetime.now().isoformat()
+    }
+""".strip()
             },
-            'user_agent_endpoint': {
-                'url': 'https://httpbin.org/user-agent',
-                'response_length': len(ua_response) if ua_response else 0,
-                'success': bool(ua_response and 'user-agent' in ua_response)
+            "data_table_extraction": {
+                "description": "Extrai dados de tabela HTML",
+                "category": "data_extraction",
+                "script_content": """
+async def main():
+    await page.goto('https://example.com/data-table')
+
+    # Wait for table to load
+    await page.wait_for_selector('table')
+
+    # Extract table headers
+    headers = await page.evaluate('''() => {
+        const headerCells = document.querySelectorAll('table thead th');
+        return Array.from(headerCells).map(cell => cell.textContent.trim());
+    }''')
+
+    # Extract table rows
+    rows = await page.evaluate('''() => {
+        const dataRows = document.querySelectorAll('table tbody tr');
+        return Array.from(dataRows).map(row => {
+            const cells = row.querySelectorAll('td');
+            return Array.from(cells).map(cell => cell.textContent.trim());
+        });
+    }''')
+
+    # Structure data
+    structured_data = []
+    for row in rows:
+        row_data = {}
+        for i, header in enumerate(headers):
+            if i < len(row):
+                row_data[header] = row[i]
+        structured_data.append(row_data)
+
+    return {
+        'headers': headers,
+        'row_count': len(rows),
+        'data': structured_data[:50],  # Limit to first 50 rows
+        'total_columns': len(headers),
+        'extracted_at': datetime.now().isoformat()
+    }
+""".strip()
             }
-        },
-        'summary': {
-            'total_tests': 3,
-            'passed_tests': sum([
-                bool(json_response and 'slideshow' in json_response),
-                bool(ip_response and 'origin' in ip_response),
-                bool(ua_response and 'user-agent' in ua_response)
-            ])
         }
-    }
-''',
-    },
-    "ecommerce_demo": {
-        "name": "ecommerce_demo",
-        "description": "Demonstra navegação em site de e-commerce",
-        "category": "automation",
-        "script_content": '''
-async def main():
-    """
-    Navega em um site de e-commerce de demonstração
-    """
-    await page.goto('https://demo.opencart.com/')
-
-    # Aguardar carregamento
-    await page.wait_for_load_state('networkidle')
-
-    # Buscar por produto
-    search_box = page.locator('input[name="search"]')
-    await search_box.fill('laptop')
-    await search_box.press('Enter')
-
-    # Aguardar resultados
-    await page.wait_for_selector('.product-thumb', timeout=10000)
-
-    # Contar produtos encontrados
-    products = page.locator('.product-thumb')
-    product_count = await products.count()
-
-    # Extrair informações dos primeiros 3 produtos
-    product_list = []
-    for i in range(min(3, product_count)):
-        try:
-            product = products.nth(i)
-            name = await product.locator('.caption h4 a').inner_text()
-            price = await product.locator('.price').inner_text()
-
-            product_list.append({
-                'name': name.strip(),
-                'price': price.strip()
-            })
-        except:
-            continue
-
-    # Verificar categorias disponíveis
-    categories = page.locator('.list-group-item')
-    category_count = await categories.count()
-
-    return {
-        'search_term': 'laptop',
-        'results': {
-            'total_products': product_count,
-            'products_sampled': len(product_list),
-            'products': product_list
-        },
-        'site_info': {
-            'title': await page.title(),
-            'categories_count': category_count,
-            'url': page.url
-        }
-    }
-''',
-    },
-    "social_media_check": {
-        "name": "social_media_check",
-        "description": "Verifica links de redes sociais em uma página",
-        "category": "web_scraping",
-        "script_content": '''
-async def main():
-    """
-    Analisa uma página em busca de links de redes sociais
-    """
-    await page.goto('https://github.com')
-
-    # Aguardar carregamento
-    await page.wait_for_load_state('networkidle')
-
-    # Buscar links de redes sociais
-    social_patterns = {
-        'twitter': ['twitter.com', 't.co'],
-        'facebook': ['facebook.com', 'fb.com'],
-        'instagram': ['instagram.com'],
-        'linkedin': ['linkedin.com'],
-        'youtube': ['youtube.com', 'youtu.be'],
-        'github': ['github.com']
-    }
-
-    all_links = await page.locator('a').all()
-    social_links = {}
-
-    for link in all_links:
-        try:
-            href = await link.get_attribute('href')
-            if href:
-                for platform, domains in social_patterns.items():
-                    for domain in domains:
-                        if domain in href:
-                            if platform not in social_links:
-                                social_links[platform] = []
-                            social_links[platform].append(href)
-                            break
-        except:
-            continue
-
-    # Contar outros elementos
-    images_count = await page.locator('img').count()
-    buttons_count = await page.locator('button').count()
-    forms_count = await page.locator('form').count()
-
-    return {
-        'page_analysis': {
-            'title': await page.title(),
-            'url': page.url,
-            'total_links': len(all_links),
-            'images': images_count,
-            'buttons': buttons_count,
-            'forms': forms_count
-        },
-        'social_media': {
-            'platforms_found': list(social_links.keys()),
-            'total_social_links': sum(len(links) for links in social_links.values()),
-            'details': social_links
-        }
-    }
-''',
-    },
-}
-
-
-class TemplateManager:
-    def __init__(self):
-        self.templates_cache = {}
-
-    async def initialize(self):
-        """Initialize templates in database"""
-        logger.info("template_manager_initializing")
-
-        # Ensure built-in templates exist in database
-        for template_data in BUILT_IN_TEMPLATES.values():
-            await self._ensure_template_exists(template_data)
-
-        logger.info(
-            "template_manager_initialized", builtin_templates=len(BUILT_IN_TEMPLATES)
-        )
-
-    async def _ensure_template_exists(self, template_data: Dict):
-        """Ensure a template exists in the database"""
-        async with db.get_connection() as conn:
-            cursor = await conn.execute(
-                "SELECT id FROM script_templates WHERE name = ?",
-                (template_data["name"],),
-            )
-
-            row = await cursor.fetchone()
-
-            if not row:
-                await conn.execute(
-                    """
-                    INSERT INTO script_templates (name, description, script_content, category)
-                    VALUES (?, ?, ?, ?)
-                """,
-                    (
-                        template_data["name"],
-                        template_data["description"],
-                        template_data["script_content"],
-                        template_data["category"],
-                    ),
-                )
-                await conn.commit()
-
-                logger.info("template_created", name=template_data["name"])
 
     async def get_all_templates(self) -> List[ScriptTemplate]:
-        """Get all available templates"""
-        async with db.get_connection() as conn:
-            cursor = await conn.execute("""
-                SELECT id, name, description, script_content, category, created_at, usage_count
-                FROM script_templates
-                ORDER BY category, name
-            """)
+        """Get all available templates (builtin + custom)"""
+        templates = []
 
-            rows = await cursor.fetchall()
-            templates = []
+        # Add builtin templates
+        for name, template_data in self.builtin_templates.items():
+            template = ScriptTemplate(
+                name=name,
+                description=template_data["description"],
+                category=template_data["category"],
+                script_content=template_data["script_content"],
+                usage_count=0  # Builtin templates don't track usage
+            )
+            templates.append(template)
 
-            for row in rows:
-                templates.append(
-                    ScriptTemplate(
-                        id=row["id"],
-                        name=row["name"],
-                        description=row["description"],
-                        script_content=row["script_content"],
-                        category=row["category"],
-                        created_at=row["created_at"],
-                        usage_count=row["usage_count"],
+        # Add custom templates from database
+        try:
+            async with aiosqlite.connect(settings.DATABASE_PATH) as db:
+                async with db.execute("""
+                    SELECT name, description, script_content, category, usage_count
+                    FROM script_templates
+                    ORDER BY usage_count DESC, name
+                """) as cursor:
+                    rows = await cursor.fetchall()
+
+                for row in rows:
+                    template = ScriptTemplate(
+                        name=row[0],
+                        description=row[1] or "",
+                        script_content=row[2],
+                        category=row[3] or "custom",
+                        usage_count=row[4] or 0
                     )
-                )
+                    templates.append(template)
 
-            return templates
+        except Exception as e:
+            logger.error("Failed to load custom templates", error=str(e))
 
-    async def get_template_by_name(self, name: str) -> Optional[ScriptTemplate]:
-        """Get a specific template by name"""
-        async with db.get_connection() as conn:
-            cursor = await conn.execute(
-                """
-                SELECT id, name, description, script_content, category, created_at, usage_count
-                FROM script_templates
-                WHERE name = ?
-            """,
-                (name,),
+        return templates
+
+    async def get_template_by_name(self, template_name: str) -> Optional[ScriptTemplate]:
+        """Get specific template by name"""
+        # Check builtin templates first
+        if template_name in self.builtin_templates:
+            template_data = self.builtin_templates[template_name]
+            return ScriptTemplate(
+                name=template_name,
+                description=template_data["description"],
+                category=template_data["category"],
+                script_content=template_data["script_content"],
+                usage_count=0
             )
 
-            row = await cursor.fetchone()
+        # Check custom templates in database
+        try:
+            async with aiosqlite.connect(settings.DATABASE_PATH) as db:
+                async with db.execute("""
+                    SELECT name, description, script_content, category, usage_count
+                    FROM script_templates
+                    WHERE name = ?
+                """, (template_name,)) as cursor:
+                    row = await cursor.fetchone()
 
-            if row:
-                return ScriptTemplate(
-                    id=row["id"],
-                    name=row["name"],
-                    description=row["description"],
-                    script_content=row["script_content"],
-                    category=row["category"],
-                    created_at=row["created_at"],
-                    usage_count=row["usage_count"],
-                )
+                if row:
+                    return ScriptTemplate(
+                        name=row[0],
+                        description=row[1] or "",
+                        script_content=row[2],
+                        category=row[3] or "custom",
+                        usage_count=row[4] or 0
+                    )
 
-            return None
+        except Exception as e:
+            logger.error("Failed to load template", template_name=template_name, error=str(e))
+
+        return None
+
+    async def create_custom_template(self, name: str, description: str,
+                                   script_content: str, category: str = "custom") -> bool:
+        """Create a new custom template"""
+        try:
+            async with aiosqlite.connect(settings.DATABASE_PATH) as db:
+                await db.execute("""
+                    INSERT INTO script_templates (name, description, script_content, category)
+                    VALUES (?, ?, ?, ?)
+                """, (name, description, script_content, category))
+                await db.commit()
+
+            logger.info("Custom template created", template_name=name, category=category)
+            return True
+
+        except Exception as e:
+            logger.error("Failed to create custom template", template_name=name, error=str(e))
+            return False
+
+    async def update_template_usage(self, template_name: str):
+        """Increment usage count for a template"""
+        if template_name in self.builtin_templates:
+            # Builtin templates don't track usage in database
+            return
+
+        try:
+            async with aiosqlite.connect(settings.DATABASE_PATH) as db:
+                await db.execute("""
+                    UPDATE script_templates
+                    SET usage_count = usage_count + 1
+                    WHERE name = ?
+                """, (template_name,))
+                await db.commit()
+
+        except Exception as e:
+            logger.error("Failed to update template usage", template_name=template_name, error=str(e))
+
+    async def delete_custom_template(self, template_name: str) -> bool:
+        """Delete a custom template (cannot delete builtin templates)"""
+        if template_name in self.builtin_templates:
+            return False  # Cannot delete builtin templates
+
+        try:
+            async with aiosqlite.connect(settings.DATABASE_PATH) as db:
+                cursor = await db.execute("""
+                    DELETE FROM script_templates WHERE name = ?
+                """, (template_name,))
+                await db.commit()
+
+                if cursor.rowcount > 0:
+                    logger.info("Custom template deleted", template_name=template_name)
+                    return True
+
+        except Exception as e:
+            logger.error("Failed to delete custom template", template_name=template_name, error=str(e))
+
+        return False
 
     async def get_templates_by_category(self, category: str) -> List[ScriptTemplate]:
         """Get templates filtered by category"""
-        async with db.get_connection() as conn:
-            cursor = await conn.execute(
-                """
-                SELECT id, name, description, script_content, category, created_at, usage_count
-                FROM script_templates
-                WHERE category = ?
-                ORDER BY name
-            """,
-                (category,),
-            )
+        all_templates = await self.get_all_templates()
+        return [t for t in all_templates if t.category.lower() == category.lower()]
 
-            rows = await cursor.fetchall()
-            templates = []
+    async def search_templates(self, query: str) -> List[ScriptTemplate]:
+        """Search templates by name, description, or content"""
+        all_templates = await self.get_all_templates()
+        query_lower = query.lower()
 
-            for row in rows:
-                templates.append(
-                    ScriptTemplate(
-                        id=row["id"],
-                        name=row["name"],
-                        description=row["description"],
-                        script_content=row["script_content"],
-                        category=row["category"],
-                        created_at=row["created_at"],
-                        usage_count=row["usage_count"],
-                    )
-                )
+        matching_templates = []
+        for template in all_templates:
+            if (query_lower in template.name.lower() or
+                query_lower in template.description.lower() or
+                query_lower in template.script_content.lower()):
+                matching_templates.append(template)
 
-            return templates
+        return matching_templates
 
-    async def get_template_categories(self) -> List[str]:
-        """Get all available categories"""
-        async with db.get_connection() as conn:
-            cursor = await conn.execute("""
-                SELECT DISTINCT category
-                FROM script_templates
-                ORDER BY category
-            """)
+    async def get_template_categories(self) -> List[Dict[str, any]]:
+        """Get all available template categories with counts"""
+        all_templates = await self.get_all_templates()
+        categories = {}
 
-            rows = await cursor.fetchall()
-            return [row["category"] for row in rows if row["category"]]
+        for template in all_templates:
+            category = template.category
+            if category not in categories:
+                categories[category] = {
+                    "name": category,
+                    "count": 0,
+                    "templates": []
+                }
+            categories[category]["count"] += 1
+            categories[category]["templates"].append(template.name)
 
-    async def increment_template_usage(self, template_name: str):
-        """Increment usage counter for a template"""
-        async with db.get_connection() as conn:
-            await conn.execute(
-                """
-                UPDATE script_templates
-                SET usage_count = usage_count + 1
-                WHERE name = ?
-            """,
-                (template_name,),
-            )
-            await conn.commit()
+        return list(categories.values())
 
-            logger.info("template_usage_incremented", name=template_name)
+    async def validate_template_script(self, script_content: str) -> Dict[str, any]:
+        """Validate template script content"""
+        from app.validation import script_validator
 
-    async def create_custom_template(self, template: ScriptTemplate) -> ScriptTemplate:
-        """Create a new custom template"""
-        async with db.get_connection() as conn:
-            cursor = await conn.execute(
-                """
-                INSERT INTO script_templates (name, description, script_content, category)
-                VALUES (?, ?, ?, ?)
-            """,
-                (
-                    template.name,
-                    template.description,
-                    template.script_content,
-                    template.category,
-                ),
-            )
+        validation_result = script_validator.validate_script_for_execution(script_content)
 
-            template_id = cursor.lastrowid
-            await conn.commit()
-
-            logger.info(
-                "custom_template_created",
-                name=template.name,
-                category=template.category,
-            )
-
-            return await self.get_template_by_id(template_id)
-
-    async def get_template_by_id(self, template_id: int) -> Optional[ScriptTemplate]:
-        """Get template by ID"""
-        async with db.get_connection() as conn:
-            cursor = await conn.execute(
-                """
-                SELECT id, name, description, script_content, category, created_at, usage_count
-                FROM script_templates
-                WHERE id = ?
-            """,
-                (template_id,),
-            )
-
-            row = await cursor.fetchone()
-
-            if row:
-                return ScriptTemplate(
-                    id=row["id"],
-                    name=row["name"],
-                    description=row["description"],
-                    script_content=row["script_content"],
-                    category=row["category"],
-                    created_at=row["created_at"],
-                    usage_count=row["usage_count"],
-                )
-
-            return None
-
-    async def update_template(
-        self, template_id: int, updates: Dict
-    ) -> Optional[ScriptTemplate]:
-        """Update an existing template"""
-        update_fields = []
-        update_values = []
-
-        for field, value in updates.items():
-            if field in ["name", "description", "script_content", "category"]:
-                update_fields.append(f"{field} = ?")
-                update_values.append(value)
-
-        if not update_fields:
-            return await self.get_template_by_id(template_id)
-
-        update_values.append(template_id)
-
-        async with db.get_connection() as conn:
-            await conn.execute(
-                f"UPDATE script_templates SET {', '.join(update_fields)} WHERE id = ?",
-                update_values,
-            )
-            await conn.commit()
-
-        logger.info("template_updated", template_id=template_id)
-        return await self.get_template_by_id(template_id)
-
-    async def delete_template(self, template_id: int) -> bool:
-        """Delete a template"""
-        async with db.get_connection() as conn:
-            cursor = await conn.execute(
-                "DELETE FROM script_templates WHERE id = ?", (template_id,)
-            )
-            await conn.commit()
-
-            deleted = cursor.rowcount > 0
-            if deleted:
-                logger.info("template_deleted", template_id=template_id)
-
-            return deleted
-
-    async def get_popular_templates(self, limit: int = 10) -> List[ScriptTemplate]:
-        """Get most popular templates by usage"""
-        async with db.get_connection() as conn:
-            cursor = await conn.execute(
-                """
-                SELECT id, name, description, script_content, category, created_at, usage_count
-                FROM script_templates
-                WHERE usage_count > 0
-                ORDER BY usage_count DESC
-                LIMIT ?
-            """,
-                (limit,),
-            )
-
-            rows = await cursor.fetchall()
-            templates = []
-
-            for row in rows:
-                templates.append(
-                    ScriptTemplate(
-                        id=row["id"],
-                        name=row["name"],
-                        description=row["description"],
-                        script_content=row["script_content"],
-                        category=row["category"],
-                        created_at=row["created_at"],
-                        usage_count=row["usage_count"],
-                    )
-                )
-
-            return templates
+        return {
+            "is_valid": validation_result["is_safe"],
+            "warnings": validation_result["analysis"].security_warnings,
+            "estimated_time": validation_result["estimated_time"],
+            "complexity": validation_result["analysis"].estimated_complexity,
+            "detected_operations": validation_result["analysis"].detected_operations
+        }
 
 
-# Global template manager
-template_manager = TemplateManager()
+# Global template service instance
+template_service = TemplateService()

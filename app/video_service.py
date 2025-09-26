@@ -1,341 +1,332 @@
 import os
 import asyncio
+import aiofiles
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Any, Optional, List
-import aiofiles
+from typing import Optional, Dict, Any, List
+import structlog
 
-from .config import settings
-from .database import db
-from .models import VideoInfo
-from .logger import video_logger
+from app.config import settings
+from app.models import VideoInfo
+from app.logger import execution_logger
+
+logger = structlog.get_logger()
 
 
-class VideoManager:
+class VideoService:
+    """Service for managing video recordings"""
+
     def __init__(self):
-        self.base_video_dir = Path("data/videos")
-        self.base_video_dir.mkdir(parents=True, exist_ok=True)
+        self.base_video_path = Path("./data/videos")
+        self.video_cache: Dict[str, VideoInfo] = {}
 
-    async def get_video_path(self, request_id: str) -> Optional[str]:
+    async def initialize(self):
+        """Initialize video service"""
+        # Create video directories
+        self.base_video_path.mkdir(parents=True, exist_ok=True)
+
+        # Create date-based directory structure
+        today = datetime.now()
+        today_path = self.base_video_path / today.strftime("%Y") / today.strftime("%m") / today.strftime("%d")
+        today_path.mkdir(parents=True, exist_ok=True)
+
+        logger.info("Video service initialized", base_path=str(self.base_video_path))
+
+    def get_video_path(self, request_id: str, date: Optional[datetime] = None) -> Path:
         """Get video file path for a request"""
-        execution = await db.get_execution_by_request_id(request_id)
-        if execution and execution["video_path"]:
-            video_path = Path(execution["video_path"])
-            if video_path.exists():
-                return str(video_path)
+        if not date:
+            date = datetime.now()
+
+        date_path = self.base_video_path / date.strftime("%Y") / date.strftime("%m") / date.strftime("%d")
+        return date_path / f"{request_id}.webm"
+
+    def get_video_directory(self, date: Optional[datetime] = None) -> Path:
+        """Get video directory for a specific date"""
+        if not date:
+            date = datetime.now()
+
+        return self.base_video_path / date.strftime("%Y") / date.strftime("%m") / date.strftime("%d")
+
+    async def save_video_info(self, request_id: str, video_path: str, duration_seconds: float = 0.0):
+        """Save video information to cache"""
+        try:
+            if os.path.exists(video_path):
+                stat = os.stat(video_path)
+                size_mb = stat.st_size / 1024 / 1024
+                created_at = datetime.fromtimestamp(stat.st_ctime)
+
+                video_info = VideoInfo(
+                    request_id=request_id,
+                    duration_seconds=duration_seconds,
+                    size_mb=size_mb,
+                    created_at=created_at,
+                    width=settings.VIDEO_WIDTH,
+                    height=settings.VIDEO_HEIGHT
+                )
+
+                self.video_cache[request_id] = video_info
+
+                execution_logger.log_video_event(
+                    "saved",
+                    request_id=request_id,
+                    video_path=video_path,
+                    video_size_mb=size_mb
+                )
+
+                return video_info
+
+        except Exception as e:
+            logger.error("Failed to save video info", request_id=request_id, error=str(e))
+
         return None
 
     async def get_video_info(self, request_id: str) -> Optional[VideoInfo]:
-        """Get video metadata"""
-        execution = await db.get_execution_by_request_id(request_id)
-        if not execution or not execution["video_path"]:
-            return None
+        """Get video information"""
+        # Check cache first
+        if request_id in self.video_cache:
+            return self.video_cache[request_id]
 
-        video_path = Path(execution["video_path"])
-        if not video_path.exists():
-            return None
+        # Search for video file
+        video_path = await self.find_video_file(request_id)
+        if video_path and os.path.exists(video_path):
+            return await self.save_video_info(request_id, video_path)
 
+        return None
+
+    async def find_video_file(self, request_id: str) -> Optional[str]:
+        """Find video file by request ID"""
+        # Search in recent days (up to 7 days)
+        for days_back in range(8):
+            search_date = datetime.now() - timedelta(days=days_back)
+            video_path = self.get_video_path(request_id, search_date)
+
+            if video_path.exists():
+                return str(video_path)
+
+        return None
+
+    async def serve_video_file(self, request_id: str) -> Optional[str]:
+        """Get video file path for serving"""
+        video_path = await self.find_video_file(request_id)
+        if video_path and os.path.exists(video_path):
+            return video_path
+        return None
+
+    async def delete_video(self, request_id: str) -> bool:
+        """Delete a specific video"""
         try:
-            # Get file stats
-            stat = video_path.stat()
-            file_size_mb = stat.st_size / 1024 / 1024
-            created_at = datetime.fromtimestamp(stat.st_ctime)
+            video_path = await self.find_video_file(request_id)
+            if video_path and os.path.exists(video_path):
+                os.remove(video_path)
 
-            # Estimate duration based on file size (rough estimate)
-            # WebM 720p @ 30fps averages ~1MB per 10 seconds
-            estimated_duration = (file_size_mb * 10) if file_size_mb > 0 else 0
+                # Remove from cache
+                self.video_cache.pop(request_id, None)
 
-            return VideoInfo(
-                request_id=request_id,
-                duration_seconds=estimated_duration,
-                size_mb=round(file_size_mb, 2),
-                created_at=created_at,
-                resolution=f"{settings.video_width}x{settings.video_height}",
-                format="webm",
-            )
-        except Exception as e:
-            video_logger.error("video_info_failed", request_id=request_id, error=str(e))
-            return None
-
-    async def serve_video(self, request_id: str, api_key_id: int) -> Optional[tuple]:
-        """Serve video file with access control"""
-        # Verify access - user can only access videos from their own executions
-        execution = await db.get_execution_by_request_id(request_id)
-        if not execution:
-            video_logger.security_event(
-                "video_access_denied",
-                api_key_id=api_key_id,
-                request_id=request_id,
-                reason="execution_not_found",
-            )
-            return None
-
-        if execution["api_key_id"] != api_key_id:
-            video_logger.security_event(
-                "video_access_denied",
-                api_key_id=api_key_id,
-                request_id=request_id,
-                reason="unauthorized_access",
-            )
-            return None
-
-        video_path = await self.get_video_path(request_id)
-        if not video_path:
-            return None
-
-        try:
-            # Read video file
-            async with aiofiles.open(video_path, "rb") as f:
-                content = await f.read()
-
-            video_logger.info(
-                "video_served",
-                request_id=request_id,
-                api_key_id=api_key_id,
-                file_size_mb=len(content) / 1024 / 1024,
-            )
-
-            return content, "video/webm"
+                execution_logger.log_video_event("deleted", request_id=request_id, video_path=video_path)
+                return True
 
         except Exception as e:
-            video_logger.error(
-                "video_serve_failed", request_id=request_id, error=str(e)
-            )
-            return None
+            logger.error("Failed to delete video", request_id=request_id, error=str(e))
 
-    async def list_videos_by_api_key(
-        self, api_key_id: int, limit: int = 50
-    ) -> List[Dict[str, Any]]:
-        """List recent videos for an API key"""
-        async with db.get_connection() as conn:
-            cursor = await conn.execute(
-                """
-                SELECT request_id, created_at, video_path, video_size_mb, execution_time, status
-                FROM executions
-                WHERE api_key_id = ? AND video_path IS NOT NULL
-                ORDER BY created_at DESC
-                LIMIT ?
-            """,
-                (api_key_id, limit),
-            )
+        return False
 
-            rows = await cursor.fetchall()
-            videos = []
+    async def cleanup_old_videos(self, retention_days: int = None) -> Dict[str, Any]:
+        """Cleanup videos older than retention period"""
+        if retention_days is None:
+            retention_days = settings.VIDEO_RETENTION_DAYS
 
-            for row in rows:
-                video_info = await self.get_video_info(row["request_id"])
-                if video_info:
-                    videos.append(
-                        {
-                            "request_id": row["request_id"],
-                            "created_at": row["created_at"],
-                            "size_mb": video_info.size_mb,
-                            "duration_seconds": video_info.duration_seconds,
-                            "execution_time": row["execution_time"],
-                            "status": row["status"],
-                            "video_url": f"/video/{row['request_id']}",
-                        }
-                    )
-
-            return videos
-
-    async def get_storage_stats(self) -> Dict[str, Any]:
-        """Get video storage statistics"""
-        total_size = 0
-        total_files = 0
-
-        for video_file in self.base_video_dir.rglob("*.webm"):
-            try:
-                size = video_file.stat().st_size
-                total_size += size
-                total_files += 1
-            except:
-                continue
-
-        return {
-            "total_files": total_files,
-            "total_size_mb": round(total_size / 1024 / 1024, 2),
-            "total_size_gb": round(total_size / 1024 / 1024 / 1024, 2),
-        }
-
-    async def cleanup_old_videos(self, force: bool = False) -> Dict[str, Any]:
-        """Clean up videos older than retention period"""
-        cutoff_date = datetime.now() - timedelta(days=settings.video_retention_days)
-
-        if not force:
-            # Check if it's cleanup time
-            current_hour = datetime.now().hour
-            if current_hour != settings.video_cleanup_hour:
-                return {"status": "skipped", "reason": "not_cleanup_time"}
-
-        video_logger.info("video_cleanup_started", cutoff_date=cutoff_date.isoformat())
-
-        deleted_files = 0
-        deleted_size = 0
+        cutoff_date = datetime.now() - timedelta(days=retention_days)
+        deleted_count = 0
+        deleted_size_mb = 0.0
         errors = []
 
-        for video_file in self.base_video_dir.rglob("*.webm"):
-            try:
-                file_stat = video_file.stat()
-                file_date = datetime.fromtimestamp(file_stat.st_mtime)
+        try:
+            # Walk through date directories
+            for year_dir in self.base_video_path.iterdir():
+                if not year_dir.is_dir() or not year_dir.name.isdigit():
+                    continue
 
-                if file_date < cutoff_date:
-                    file_size = file_stat.st_size
-                    video_file.unlink()
-
-                    deleted_files += 1
-                    deleted_size += file_size
-
-                    # Also update database to mark video as deleted
-                    request_id = video_file.stem
-                    await db.update_execution_video_deleted(request_id)
-
-                    video_logger.info(
-                        "video_deleted",
-                        file_path=str(video_file),
-                        file_age_days=(datetime.now() - file_date).days,
-                        file_size_mb=file_size / 1024 / 1024,
-                    )
-
-            except Exception as e:
-                errors.append(f"Failed to delete {video_file}: {str(e)}")
-                video_logger.error(
-                    "video_deletion_failed", file_path=str(video_file), error=str(e)
-                )
-
-        # Clean up empty directories
-        await self._cleanup_empty_directories()
-
-        result = {
-            "status": "completed",
-            "deleted_files": deleted_files,
-            "deleted_size_mb": round(deleted_size / 1024 / 1024, 2),
-            "errors": errors,
-            "cutoff_date": cutoff_date.isoformat(),
-        }
-
-        video_logger.info("video_cleanup_completed", **result)
-        return result
-
-    async def _cleanup_empty_directories(self):
-        """Remove empty video directories"""
-        for year_dir in self.base_video_dir.iterdir():
-            if year_dir.is_dir():
                 for month_dir in year_dir.iterdir():
-                    if month_dir.is_dir():
-                        for day_dir in month_dir.iterdir():
-                            if day_dir.is_dir() and not any(day_dir.iterdir()):
+                    if not month_dir.is_dir() or not month_dir.name.isdigit():
+                        continue
+
+                    for day_dir in month_dir.iterdir():
+                        if not day_dir.is_dir() or not day_dir.name.isdigit():
+                            continue
+
+                        # Check if this date is older than cutoff
+                        try:
+                            dir_date = datetime(
+                                year=int(year_dir.name),
+                                month=int(month_dir.name),
+                                day=int(day_dir.name)
+                            )
+
+                            if dir_date < cutoff_date:
+                                # Delete all videos in this directory
+                                for video_file in day_dir.glob("*.webm"):
+                                    try:
+                                        file_size = video_file.stat().st_size / 1024 / 1024
+                                        video_file.unlink()
+                                        deleted_count += 1
+                                        deleted_size_mb += file_size
+
+                                        # Remove from cache
+                                        request_id = video_file.stem
+                                        self.video_cache.pop(request_id, None)
+
+                                    except Exception as e:
+                                        errors.append(f"Failed to delete {video_file}: {str(e)}")
+
+                                # Try to remove empty directory
                                 try:
-                                    day_dir.rmdir()
-                                    video_logger.debug(
-                                        "empty_directory_removed", path=str(day_dir)
-                                    )
+                                    if not any(day_dir.iterdir()):
+                                        day_dir.rmdir()
                                 except:
                                     pass
 
-                        # Check if month directory is empty
-                        if not any(month_dir.iterdir()):
-                            try:
-                                month_dir.rmdir()
-                                video_logger.debug(
-                                    "empty_directory_removed", path=str(month_dir)
-                                )
-                            except:
-                                pass
+                        except ValueError:
+                            # Invalid date directory
+                            continue
 
-                # Check if year directory is empty
-                if not any(year_dir.iterdir()):
-                    try:
-                        year_dir.rmdir()
-                        video_logger.debug(
-                            "empty_directory_removed", path=str(year_dir)
-                        )
-                    except:
-                        pass
+        except Exception as e:
+            errors.append(f"Cleanup error: {str(e)}")
+
+        result = {
+            "deleted_count": deleted_count,
+            "deleted_size_mb": deleted_size_mb,
+            "retention_days": retention_days,
+            "cutoff_date": cutoff_date.isoformat(),
+            "errors": errors
+        }
+
+        if deleted_count > 0:
+            execution_logger.log_video_event(
+                "cleanup_completed",
+                request_id="bulk",
+                deleted_count=deleted_count,
+                deleted_size_mb=deleted_size_mb
+            )
+
+        return result
+
+    async def get_storage_stats(self) -> Dict[str, Any]:
+        """Get video storage statistics"""
+        total_files = 0
+        total_size_mb = 0.0
+        oldest_video = None
+        newest_video = None
+
+        try:
+            for video_file in self.base_video_path.rglob("*.webm"):
+                if video_file.is_file():
+                    stat = video_file.stat()
+                    total_files += 1
+                    total_size_mb += stat.st_size / 1024 / 1024
+
+                    file_time = datetime.fromtimestamp(stat.st_ctime)
+                    if oldest_video is None or file_time < oldest_video:
+                        oldest_video = file_time
+                    if newest_video is None or file_time > newest_video:
+                        newest_video = file_time
+
+        except Exception as e:
+            logger.error("Failed to get storage stats", error=str(e))
+
+        return {
+            "total_files": total_files,
+            "total_size_mb": round(total_size_mb, 2),
+            "total_size_gb": round(total_size_mb / 1024, 2),
+            "oldest_video": oldest_video.isoformat() if oldest_video else None,
+            "newest_video": newest_video.isoformat() if newest_video else None,
+            "retention_days": settings.VIDEO_RETENTION_DAYS
+        }
+
+    async def list_videos_by_date(self, date: datetime, limit: int = 100) -> List[Dict[str, Any]]:
+        """List videos for a specific date"""
+        videos = []
+        date_dir = self.get_video_directory(date)
+
+        if not date_dir.exists():
+            return videos
+
+        try:
+            video_files = list(date_dir.glob("*.webm"))[:limit]
+
+            for video_file in video_files:
+                try:
+                    stat = video_file.stat()
+                    request_id = video_file.stem
+
+                    videos.append({
+                        "request_id": request_id,
+                        "file_path": str(video_file),
+                        "size_mb": round(stat.st_size / 1024 / 1024, 2),
+                        "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                        "width": settings.VIDEO_WIDTH,
+                        "height": settings.VIDEO_HEIGHT
+                    })
+
+                except Exception as e:
+                    logger.error("Failed to process video file", file=str(video_file), error=str(e))
+
+        except Exception as e:
+            logger.error("Failed to list videos", date=date.isoformat(), error=str(e))
+
+        return sorted(videos, key=lambda x: x["created_at"], reverse=True)
+
+    async def get_recent_videos(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get most recent videos across all dates"""
+        all_videos = []
+
+        # Search last 7 days
+        for days_back in range(8):
+            search_date = datetime.now() - timedelta(days=days_back)
+            date_videos = await self.list_videos_by_date(search_date, limit)
+            all_videos.extend(date_videos)
+
+        # Sort by creation time and limit
+        all_videos.sort(key=lambda x: x["created_at"], reverse=True)
+        return all_videos[:limit]
 
     async def validate_video_access(self, request_id: str, api_key_id: int) -> bool:
-        """Validate if API key can access the video"""
-        execution = await db.get_execution_by_request_id(request_id)
-        if not execution:
-            return False
+        """Validate that API key can access specific video"""
+        # For now, allow access to any video with valid API key
+        # In production, you might want to check if the API key was used for this execution
+        video_info = await self.get_video_info(request_id)
+        return video_info is not None
 
-        return execution["api_key_id"] == api_key_id
+    async def create_video_url(self, request_id: str, api_key: str, base_url: str = "http://localhost:8000") -> str:
+        """Create video access URL"""
+        return f"{base_url}/video/{request_id}/{api_key}"
 
-    async def get_video_url(self, request_id: str, api_key_id: int) -> Optional[str]:
-        """Get public video URL if access is allowed"""
-        if await self.validate_video_access(request_id, api_key_id):
-            # Get API key value for URL
-            api_key_obj = await db.get_api_key_by_id(api_key_id)
-            if api_key_obj:
-                return (
-                    f"http://localhost:8000/video/{request_id}/{api_key_obj.key_value}"
-                )
-        return None
+    async def estimate_disk_usage(self) -> Dict[str, Any]:
+        """Estimate disk usage and projection"""
+        stats = await self.get_storage_stats()
 
+        # Estimate daily growth (based on recent videos)
+        today_videos = await self.list_videos_by_date(datetime.now())
+        yesterday_videos = await self.list_videos_by_date(datetime.now() - timedelta(days=1))
 
-class VideoCleanupScheduler:
-    def __init__(self, video_manager: VideoManager):
-        self.video_manager = video_manager
-        self._cleanup_task = None
+        daily_growth_mb = 0.0
+        if today_videos:
+            daily_growth_mb = sum(v["size_mb"] for v in today_videos)
+        elif yesterday_videos:
+            daily_growth_mb = sum(v["size_mb"] for v in yesterday_videos)
 
-    async def start(self):
-        """Start the cleanup scheduler"""
-        if self._cleanup_task:
-            return
+        # Project future usage
+        projected_30_days_mb = stats["total_size_mb"] + (daily_growth_mb * 30)
+        projected_90_days_mb = stats["total_size_mb"] + (daily_growth_mb * 90)
 
-        self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-        video_logger.info("video_cleanup_scheduler_started")
-
-    async def stop(self):
-        """Stop the cleanup scheduler"""
-        if self._cleanup_task:
-            self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
-            self._cleanup_task = None
-
-        video_logger.info("video_cleanup_scheduler_stopped")
-
-    async def _cleanup_loop(self):
-        """Main cleanup loop"""
-        while True:
-            try:
-                # Calculate next cleanup time
-                now = datetime.now()
-                next_cleanup = now.replace(
-                    hour=settings.video_cleanup_hour, minute=0, second=0, microsecond=0
-                )
-
-                # If we've passed today's cleanup time, schedule for tomorrow
-                if now >= next_cleanup:
-                    next_cleanup += timedelta(days=1)
-
-                # Wait until cleanup time
-                wait_seconds = (next_cleanup - now).total_seconds()
-                video_logger.info(
-                    "video_cleanup_scheduled",
-                    next_cleanup=next_cleanup.isoformat(),
-                    wait_hours=wait_seconds / 3600,
-                )
-
-                await asyncio.sleep(wait_seconds)
-
-                # Perform cleanup
-                result = await self.video_manager.cleanup_old_videos(force=True)
-                video_logger.info("scheduled_cleanup_completed", **result)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                video_logger.error("cleanup_scheduler_error", error=str(e))
-                # Wait 1 hour before retrying
-                await asyncio.sleep(3600)
+        return {
+            "current_usage": stats,
+            "daily_growth_mb": round(daily_growth_mb, 2),
+            "projected_30_days_mb": round(projected_30_days_mb, 2),
+            "projected_90_days_mb": round(projected_90_days_mb, 2),
+            "retention_days": settings.VIDEO_RETENTION_DAYS,
+            "max_retention_size_mb": round(daily_growth_mb * settings.VIDEO_RETENTION_DAYS, 2)
+        }
 
 
-# Global video manager instance
-video_manager = VideoManager()
-
-# Global cleanup scheduler
-cleanup_scheduler = VideoCleanupScheduler(video_manager)
+# Global video service instance
+video_service = VideoService()

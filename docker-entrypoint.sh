@@ -1,123 +1,95 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Playwright Automation Server - Starting..."
+echo "🎭 Starting Playwright Automation Server..."
 
-# Function to log with timestamp
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-}
-
-# Check if data directory exists and is writable
-log "Checking data directory..."
-if [ ! -d "/app/data" ]; then
-    log "Creating data directory..."
-    mkdir -p /app/data/videos
+# Check if running as root and warn
+if [ "$(id -u)" = "0" ]; then
+    echo "⚠️  Warning: Running as root user. Consider using a non-root user for production."
 fi
 
-if [ ! -w "/app/data" ]; then
-    log "ERROR: Data directory is not writable"
-    exit 1
+# Create data directories if they don't exist
+echo "📁 Setting up data directories..."
+mkdir -p /app/data/videos
+mkdir -p /app/data/videos/$(date +%Y)/$(date +%m)/$(date +%d)
+
+# Set permissions if running as root
+if [ "$(id -u)" = "0" ]; then
+    chown -R 1000:1000 /app/data
 fi
 
 # Initialize database if it doesn't exist
-if [ ! -f "/app/data/database.db" ]; then
-    log "Initializing database..."
-    python -c "
+echo "🗄️  Checking database..."
+if [ ! -f /app/data/database.db ]; then
+    echo "📦 Initializing database..."
+    python3 -c "
 import asyncio
 from app.database import init_database
 asyncio.run(init_database())
 print('Database initialized successfully')
-" || {
-        log "ERROR: Failed to initialize database"
-        exit 1
-    }
+"
 else
-    log "Database already exists"
+    echo "✅ Database already exists"
 fi
 
 # Ensure admin API key exists
-log "Ensuring admin API key exists..."
-python -c "
+echo "🔑 Ensuring admin API key exists..."
+python3 -c "
 import asyncio
 from app.database import ensure_admin_key
 asyncio.run(ensure_admin_key())
-print('Admin API key verified')
-" || {
-    log "ERROR: Failed to ensure admin API key"
-    exit 1
-}
+print('Admin key verified')
+"
 
-# Check Playwright installation
-log "Verifying Playwright installation..."
-python -c "
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    browser = p.chromium.launch()
-    print('Playwright verification successful')
-    browser.close()
-" || {
-    log "ERROR: Playwright verification failed"
-    exit 1
-}
+# Check system requirements
+echo "🔍 Checking system requirements..."
 
-# Display configuration
-log "Configuration:"
-log "  - Max concurrent executions: ${MAX_CONCURRENT_EXECUTIONS:-10}"
-log "  - Max queue size: ${MAX_QUEUE_SIZE:-100}"
-log "  - Video retention days: ${VIDEO_RETENTION_DAYS:-7}"
-log "  - Browser pool size: ${BROWSER_POOL_SIZE:-10}"
-log "  - Admin API key: ${ADMIN_API_KEY:0:8}..."
-
-# Check system resources
-log "System resources:"
-log "  - Memory: $(free -h | awk '/^Mem:/ {print $2}') total"
-log "  - Disk space: $(df -h /app | awk 'NR==2 {print $4}') available"
-log "  - CPU cores: $(nproc)"
-
-# Start cleanup scheduler in background if enabled
-if [ "${ENABLE_CLEANUP_SCHEDULER:-true}" = "true" ]; then
-    log "Starting cleanup scheduler..."
-    python -c "
-import asyncio
-from app.video_service import cleanup_scheduler
-async def start_cleanup():
-    await cleanup_scheduler.start()
-    print('Cleanup scheduler started')
-    # Keep running
-    try:
-        while True:
-            await asyncio.sleep(60)
-    except KeyboardInterrupt:
-        await cleanup_scheduler.stop()
-
-asyncio.run(start_cleanup())
-" &
-    CLEANUP_PID=$!
-    log "Cleanup scheduler started with PID: $CLEANUP_PID"
+# Check available memory
+AVAILABLE_MEMORY=$(free -m | awk 'NR==2{printf "%d", $7}')
+if [ "$AVAILABLE_MEMORY" -lt 512 ]; then
+    echo "⚠️  Warning: Low available memory (${AVAILABLE_MEMORY}MB). Recommend at least 512MB free."
 fi
 
-# Trap signals for graceful shutdown
-trap_handler() {
-    log "Received signal, shutting down gracefully..."
+# Check disk space
+AVAILABLE_DISK=$(df /app/data | awk 'NR==2{print $4}')
+if [ "$AVAILABLE_DISK" -lt 1048576 ]; then  # 1GB in KB
+    echo "⚠️  Warning: Low disk space. Recommend at least 1GB free for video storage."
+fi
 
-    if [ ! -z "$CLEANUP_PID" ]; then
-        log "Stopping cleanup scheduler..."
-        kill $CLEANUP_PID 2>/dev/null || true
-    fi
+# Test Playwright installation
+echo "🌐 Testing Playwright installation..."
+python3 -c "
+from playwright.sync_api import sync_playwright
+try:
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        browser.close()
+    print('✅ Playwright is working correctly')
+except Exception as e:
+    print(f'❌ Playwright test failed: {e}')
+    exit(1)
+"
 
-    log "Shutdown complete"
-    exit 0
-}
+# Start cleanup service in background
+echo "🧹 Starting cleanup service..."
+python3 -c "
+import asyncio
+from app.cleanup import start_cleanup_scheduler
+try:
+    asyncio.run(start_cleanup_scheduler())
+    print('✅ Cleanup service started')
+except Exception as e:
+    print(f'⚠️  Cleanup service warning: {e}')
+" &
 
-trap trap_handler SIGTERM SIGINT
+# Wait a moment for cleanup service to start
+sleep 2
 
-# Display startup message
-log "🎭 Playwright Automation Server is ready!"
-log "📊 Dashboard: http://localhost:8000/dashboard?api_key=${ADMIN_API_KEY}"
-log "📖 API Documentation: http://localhost:8000/docs"
-log "🔍 Health Check: http://localhost:8000/health"
+echo "🚀 Starting FastAPI server..."
+echo "📊 Dashboard will be available at http://localhost:8000/dashboard?api_key=<your_key>"
+echo "📚 API documentation at http://localhost:8000/docs"
+echo "❤️  Health check at http://localhost:8000/health"
+echo ""
 
 # Execute the main command
-log "Starting main application: $@"
 exec "$@"

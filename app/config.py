@@ -1,64 +1,59 @@
 import os
-from pathlib import Path
 from typing import List, Optional
 from pydantic import BaseSettings
 
 
 class Settings(BaseSettings):
     # Admin Access
-    admin_api_key: str = "admin-super-secret-key-2024"
+    ADMIN_API_KEY: str = "admin-super-secret-key-2024"
 
     # Execution Limits
-    max_concurrent_executions: int = 10
-    max_queue_size: int = 100
-    max_script_size: int = 50000
-    max_execution_time: int = 300
-    emergency_timeout_multiplier: int = 2
+    MAX_CONCURRENT_EXECUTIONS: int = 10
+    MAX_QUEUE_SIZE: int = 100
+    MAX_SCRIPT_SIZE: int = 50000
+    MAX_EXECUTION_TIME: int = 300
+    EMERGENCY_TIMEOUT_MULTIPLIER: int = 2
 
-    # Video Settings (720p only)
-    video_retention_days: int = 7
-    video_cleanup_hour: int = 2
-    video_width: int = 1280
-    video_height: int = 720
+    # Video Settings
+    VIDEO_RETENTION_DAYS: int = 7
+    VIDEO_CLEANUP_HOUR: int = 2
+    VIDEO_WIDTH: int = 1280
+    VIDEO_HEIGHT: int = 720
 
     # Rate Limiting
-    global_rate_limit_per_minute: int = 60
-    per_key_rate_limit_per_minute: int = 30
+    GLOBAL_RATE_LIMIT_PER_MINUTE: int = 60
+    PER_KEY_RATE_LIMIT_PER_MINUTE: int = 30
 
     # Database
-    database_path: str = "./data/database.db"
+    DATABASE_PATH: str = "./data/database.db"
 
     # Browser Pool
-    browser_pool_size: int = 10
-    browser_warmup_pages: int = 3
+    BROWSER_POOL_SIZE: int = 10
+    BROWSER_WARMUP_PAGES: int = 3
 
     # Dashboard
-    dashboard_refresh_interval: int = 5
+    DASHBOARD_REFRESH_INTERVAL: int = 5
 
     # Webhooks
-    max_webhook_retries: int = 3
-    webhook_timeout: int = 10
+    MAX_WEBHOOK_RETRIES: int = 3
+    WEBHOOK_TIMEOUT: int = 10
 
     # Resource Limits
-    max_memory_mb_per_execution: int = 512
-    max_cpu_percent_per_execution: int = 50
+    MAX_MEMORY_MB_PER_EXECUTION: int = 512
+    MAX_CPU_PERCENT_PER_EXECUTION: int = 50
 
     # Security
-    allowed_domains: str = "*"
-    script_timeout_grace_period: int = 30
+    ALLOWED_DOMAINS: str = "*"
+    SCRIPT_TIMEOUT_GRACE_PERIOD: int = 30
 
     class Config:
         env_file = ".env"
-        env_file_encoding = "utf-8"
+        case_sensitive = True
+
+    def get_allowed_domains(self) -> List[str]:
+        if self.ALLOWED_DOMAINS == "*":
+            return []
+        return [domain.strip() for domain in self.ALLOWED_DOMAINS.split(",")]
 
 
-# Global settings instance
 settings = Settings()
-
-# Ensure data directory exists
-data_dir = Path(settings.database_path).parent
-data_dir.mkdir(exist_ok=True, parents=True)
-
-# Ensure videos directory exists
-videos_dir = data_dir / "videos"
-videos_dir.mkdir(exist_ok=True, parents=True)

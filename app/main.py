@@ -1,59 +1,49 @@
-import asyncio
-import uuid
-import io
-from datetime import datetime
-from typing import List, Optional, Dict, Any
-from pathlib import Path
-
 from fastapi import FastAPI, HTTPException, Depends, Request, Query, BackgroundTasks
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+import asyncio
+from datetime import datetime
+from typing import Optional, List
 import uvicorn
+import structlog
 
-from .config import settings
-from .models import (
-    ScriptRequest,
-    ScriptResponse,
-    ApiKeyCreate,
-    ApiKeyResponse,
-    ApiKeyUpdate,
-    HealthResponse,
-    QueueStatus,
-    ValidationResult,
-    ScriptTemplate,
-    VideoInfo,
+# Import all modules
+from app.config import settings
+from app.models import (
+    ScriptRequest, ScriptResponse, ApiKeyCreate, ApiKeyUpdate, ApiKeyResponse,
+    HealthResponse, QueueStatus, VideoInfo, ScriptTemplate, ExecutionAnalytics
 )
-from .database import db, init_database, ensure_admin_key
-from .auth import (
-    auth_manager,
-    require_execute_scope,
-    require_admin_scope,
-    require_dashboard_scope,
-    require_videos_scope,
+from app.database import (
+    init_database, ensure_admin_key, create_api_key, list_api_keys,
+    get_api_key_by_id, update_api_key, delete_api_key, get_execution_analytics
 )
-from .executor import executor
-from .validation import validator
-from .video_service import video_manager, cleanup_scheduler
-from .templates import template_manager
-from .webhooks import webhook_manager
-from .health import health_checker
-from .metrics import metrics_collector
-from .dashboard import dashboard_manager
-from .logger import main_logger
+from app.auth import (
+    get_current_api_key, require_admin, require_execute, require_videos,
+    require_dashboard, RateLimitMiddleware
+)
+from app.executor import executor
+from app.video_service import video_service
+from app.health import health_checker
+from app.webhooks import webhook_service
+from app.templates import template_service
+from app.validation import script_validator
+from app.logger import request_logger, system_logger
 
+logger = structlog.get_logger()
 
 # Create FastAPI app
 app = FastAPI(
     title="Playwright Automation Server",
-    description="A powerful server for executing Playwright scripts with queue management, video recording, and comprehensive monitoring",
+    description="Advanced Playwright script execution with queue management, video recording, and monitoring",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc",
+    redoc_url="/redoc"
 )
 
-# CORS middleware
+# Add middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -62,459 +52,439 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.add_middleware(RateLimitMiddleware)
 
-security = HTTPBearer()
+# Mount static files and templates
+try:
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+    templates = Jinja2Templates(directory="templates")
+except Exception as e:
+    logger.warning("Static files or templates not found", error=str(e))
+    templates = None
 
-
+# Startup and shutdown events
 @app.on_event("startup")
 async def startup_event():
-    """Initialize all services on startup"""
-    main_logger.info("server_starting")
-
+    """Initialize all services"""
     try:
-        # Initialize database
+        system_logger.log_startup("database")
         await init_database()
         await ensure_admin_key()
-        main_logger.info("database_initialized")
 
-        # Initialize template manager
-        await template_manager.initialize()
-        main_logger.info("templates_initialized")
-
-        # Initialize executor
+        system_logger.log_startup("executor")
         await executor.initialize()
-        main_logger.info("executor_initialized")
 
-        # Start webhook manager
-        await webhook_manager.start()
-        main_logger.info("webhook_manager_started")
+        system_logger.log_startup("video_service")
+        await video_service.initialize()
 
-        # Start metrics collector
-        await metrics_collector.start()
-        main_logger.info("metrics_collector_started")
+        system_logger.log_startup("webhook_service")
+        # Webhook service doesn't need initialization
 
-        # Start video cleanup scheduler
-        await cleanup_scheduler.start()
-        main_logger.info("cleanup_scheduler_started")
-
-        main_logger.info("server_startup_complete")
+        logger.info("Playwright Automation Server started successfully")
 
     except Exception as e:
-        main_logger.error("startup_failed", error=str(e))
+        logger.error("Failed to start server", error=str(e))
         raise
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Clean shutdown of all services"""
-    main_logger.info("server_shutting_down")
-
+    """Graceful shutdown"""
     try:
-        # Stop services in reverse order
-        await cleanup_scheduler.stop()
-        await metrics_collector.stop()
-        await webhook_manager.stop()
-        await executor.close()
+        system_logger.log_shutdown("executor")
+        await executor.shutdown()
 
-        main_logger.info("server_shutdown_complete")
+        system_logger.log_shutdown("webhook_service")
+        await webhook_service.close()
+
+        logger.info("Playwright Automation Server stopped successfully")
 
     except Exception as e:
-        main_logger.error("shutdown_failed", error=str(e))
+        logger.error("Error during shutdown", error=str(e))
 
 
-# ==================== EXECUTION ENDPOINTS ====================
+# Middleware for request logging
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    return await request_logger.log_request(request, call_next)
 
+
+# EXECUTION ENDPOINTS
 
 @app.post("/execute", response_model=ScriptResponse)
 async def execute_script(
     request: ScriptRequest,
     background_tasks: BackgroundTasks,
-    api_key: ApiKeyResponse = Depends(require_execute_scope),
+    api_key = Depends(require_execute)
 ):
     """Execute a Playwright script"""
-    request_id = str(uuid.uuid4())
-
-    main_logger.info(
-        "script_execution_requested",
-        request_id=request_id,
-        api_key_id=api_key.id,
-        script_length=len(request.script),
-        priority=request.priority,
-    )
-
     try:
-        # Record metrics
-        metrics_collector.record_execution_start(api_key.id, request.priority)
-        metrics_collector.record_api_request(api_key.id, "execute")
+        # Validate script
+        validation_result = script_validator.validate_script_for_execution(request.script)
 
-        # Add to execution queue
-        queue_request_id = await executor.add_to_queue(request, api_key.id)
+        if not validation_result["is_safe"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Script validation failed",
+                    "warnings": validation_result["critical_warnings"],
+                    "recommendation": validation_result["recommendation"]
+                }
+            )
 
-        # Get initial queue position
-        queue_status = await executor.get_queue_status()
-        queue_position = next(
-            (
-                i
-                for i, item in enumerate(queue_status["queue_items"])
-                if item["request_id"] == request_id
-            ),
-            0,
-        )
+        # Queue script for execution
+        request_id = await executor.queue_script(request, api_key.id)
 
-        # Start background webhook task if needed
+        # Send webhook notification if configured
         if request.webhook_url:
             background_tasks.add_task(
-                webhook_manager.send_execution_webhook,
-                request_id,
-                api_key.id,
-                "queued",
-                0,
-                webhook_url=request.webhook_url,
+                webhook_service.notify_queue_position,
+                request_id, api_key.id, request.webhook_url, 0, 60.0  # Estimated
             )
+
+        # Get queue status
+        queue_status = await executor.get_queue_status()
 
         return ScriptResponse(
             request_id=request_id,
             success=True,
-            result="Script queued for execution",
-            execution_time=0,
-            queue_wait_time=0,
-            queue_position=queue_position,
-            priority=request.priority,
+            result=None,
+            error=None,
             video_url=f"http://localhost:8000/video/{request_id}/{api_key.key_value}",
+            execution_time=0.0,
+            queue_wait_time=0.0,
+            queue_position=queue_status["total_queued"],
+            priority=request.priority,
+            script_analysis=validation_result["analysis"]
         )
-
-    except ValueError as e:
-        # Validation error
-        main_logger.warning(
-            "script_validation_failed", request_id=request_id, error=str(e)
-        )
-        raise HTTPException(status_code=400, detail=str(e))
 
     except Exception as e:
-        # Queue full or other error
-        main_logger.error(
-            "script_execution_failed", request_id=request_id, error=str(e)
-        )
-        raise HTTPException(status_code=503, detail=str(e))
+        logger.error("Script execution failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/validate", response_model=ValidationResult)
+@app.post("/validate")
 async def validate_script(
-    request: ScriptRequest, api_key: ApiKeyResponse = Depends(require_execute_scope)
+    request: ScriptRequest,
+    api_key = Depends(require_execute)
 ):
     """Validate a script without executing it"""
-    main_logger.info(
-        "script_validation_requested",
-        api_key_id=api_key.id,
-        script_length=len(request.script),
-    )
-
     try:
-        metrics_collector.record_api_request(api_key.id, "validate")
+        validation_result = script_validator.validate_script_for_execution(request.script)
 
-        validation_result = await validator.validate_script(request.script)
-
-        main_logger.info(
-            "script_validation_completed",
-            api_key_id=api_key.id,
-            is_valid=validation_result.is_valid,
-            complexity=validation_result.estimated_complexity,
-        )
-
-        return validation_result
+        return {
+            "request_id": None,
+            "is_safe": validation_result["is_safe"],
+            "estimated_time": validation_result["estimated_time"],
+            "analysis": validation_result["analysis"].dict(),
+            "recommendation": validation_result["recommendation"],
+            "warnings": validation_result["critical_warnings"]
+        }
 
     except Exception as e:
-        main_logger.error("script_validation_error", error=str(e))
-        raise HTTPException(status_code=500, detail="Validation failed")
+        logger.error("Script validation failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== TEMPLATE ENDPOINTS ====================
-
+# TEMPLATE ENDPOINTS
 
 @app.get("/templates", response_model=List[ScriptTemplate])
 async def get_templates(
     category: Optional[str] = Query(None, description="Filter by category"),
-    api_key: ApiKeyResponse = Depends(require_execute_scope),
+    search: Optional[str] = Query(None, description="Search templates"),
+    api_key = Depends(get_current_api_key)
 ):
     """Get available script templates"""
     try:
-        metrics_collector.record_api_request(api_key.id, "templates")
-
-        if category:
-            templates = await template_manager.get_templates_by_category(category)
+        if search:
+            templates = await template_service.search_templates(search)
+        elif category:
+            templates = await template_service.get_templates_by_category(category)
         else:
-            templates = await template_manager.get_all_templates()
+            templates = await template_service.get_all_templates()
 
         return templates
 
     except Exception as e:
-        main_logger.error("templates_fetch_failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to fetch templates")
+        logger.error("Failed to get templates", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/templates/{template_name}", response_model=ScriptTemplate)
 async def get_template(
-    template_name: str, api_key: ApiKeyResponse = Depends(require_execute_scope)
+    template_name: str,
+    api_key = Depends(get_current_api_key)
 ):
-    """Get a specific template"""
+    """Get specific template by name"""
     try:
-        metrics_collector.record_api_request(api_key.id, "template_get")
-
-        template = await template_manager.get_template_by_name(template_name)
+        template = await template_service.get_template_by_name(template_name)
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
 
-        # Increment usage counter
-        await template_manager.increment_template_usage(template_name)
+        # Update usage count
+        await template_service.update_template_usage(template_name)
 
         return template
 
     except HTTPException:
         raise
     except Exception as e:
-        main_logger.error(
-            "template_fetch_failed", template_name=template_name, error=str(e)
-        )
-        raise HTTPException(status_code=500, detail="Failed to fetch template")
+        logger.error("Failed to get template", template_name=template_name, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/templates/categories", response_model=List[str])
-async def get_template_categories(
-    api_key: ApiKeyResponse = Depends(require_execute_scope),
-):
-    """Get available template categories"""
+@app.get("/templates/categories")
+async def get_template_categories(api_key = Depends(get_current_api_key)):
+    """Get template categories with counts"""
     try:
-        categories = await template_manager.get_template_categories()
-        return categories
+        categories = await template_service.get_template_categories()
+        return {"categories": categories}
+
     except Exception as e:
-        main_logger.error("categories_fetch_failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to fetch categories")
+        logger.error("Failed to get template categories", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== ADMIN ENDPOINTS ====================
-
+# ADMIN ENDPOINTS
 
 @app.post("/admin/api-keys", response_model=ApiKeyResponse)
-async def create_api_key(
-    key_data: ApiKeyCreate, admin_key: ApiKeyResponse = Depends(require_admin_scope)
+async def create_new_api_key(
+    key_data: ApiKeyCreate,
+    admin_key = Depends(require_admin)
 ):
-    """Create a new API key"""
+    """Create a new API key (admin only)"""
     try:
-        api_key = await db.create_api_key(key_data)
-
-        main_logger.info(
-            "api_key_created",
-            new_key_id=api_key.id,
-            new_key_name=api_key.name,
-            admin_key_id=admin_key.id,
-        )
-
+        api_key = await create_api_key(key_data)
+        logger.info("API key created", key_id=api_key.id, key_name=api_key.name)
         return api_key
 
     except Exception as e:
-        main_logger.error("api_key_creation_failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to create API key")
+        logger.error("Failed to create API key", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/admin/api-keys", response_model=List[ApiKeyResponse])
-async def list_api_keys(admin_key: ApiKeyResponse = Depends(require_admin_scope)):
-    """List all API keys"""
+async def list_all_api_keys(admin_key = Depends(require_admin)):
+    """List all API keys (admin only)"""
     try:
-        api_keys = await db.list_api_keys()
-        return api_keys
+        return await list_api_keys()
+
     except Exception as e:
-        main_logger.error("api_keys_list_failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to list API keys")
+        logger.error("Failed to list API keys", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.put("/admin/api-keys/{key_id}", response_model=ApiKeyResponse)
-async def update_api_key(
+async def update_existing_api_key(
     key_id: int,
     update_data: ApiKeyUpdate,
-    admin_key: ApiKeyResponse = Depends(require_admin_scope),
+    admin_key = Depends(require_admin)
 ):
-    """Update an API key"""
+    """Update an API key (admin only)"""
     try:
-        updated_key = await db.update_api_key(key_id, update_data)
-        if not updated_key:
+        api_key = await update_api_key(key_id, update_data)
+        if not api_key:
             raise HTTPException(status_code=404, detail="API key not found")
 
-        # Invalidate auth cache for this key
-        auth_manager.invalidate_cache(updated_key.key_value)
-
-        main_logger.info("api_key_updated", key_id=key_id, admin_key_id=admin_key.id)
-
-        return updated_key
+        logger.info("API key updated", key_id=key_id)
+        return api_key
 
     except HTTPException:
         raise
     except Exception as e:
-        main_logger.error("api_key_update_failed", key_id=key_id, error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to update API key")
+        logger.error("Failed to update API key", key_id=key_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/admin/api-keys/{key_id}")
-async def delete_api_key(
-    key_id: int, admin_key: ApiKeyResponse = Depends(require_admin_scope)
+async def delete_existing_api_key(
+    key_id: int,
+    admin_key = Depends(require_admin)
 ):
-    """Delete an API key"""
+    """Delete an API key (admin only)"""
     try:
-        # Get the key before deletion to invalidate cache
-        target_key = await db.get_api_key_by_id(key_id)
-
-        deleted = await db.delete_api_key(key_id)
-        if not deleted:
+        success = await delete_api_key(key_id)
+        if not success:
             raise HTTPException(status_code=404, detail="API key not found")
 
-        # Invalidate auth cache
-        if target_key:
-            auth_manager.invalidate_cache(target_key.key_value)
-
-        main_logger.info("api_key_deleted", key_id=key_id, admin_key_id=admin_key.id)
-
+        logger.info("API key deleted", key_id=key_id)
         return {"message": "API key deleted successfully"}
 
     except HTTPException:
         raise
     except Exception as e:
-        main_logger.error("api_key_deletion_failed", key_id=key_id, error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to delete API key")
+        logger.error("Failed to delete API key", key_id=key_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/admin/analytics")
-async def get_analytics(admin_key: ApiKeyResponse = Depends(require_admin_scope)):
-    """Get system analytics"""
+async def get_analytics(
+    api_key_id: Optional[int] = Query(None, description="Filter by API key ID"),
+    admin_key = Depends(require_admin)
+):
+    """Get analytics data (admin only)"""
     try:
-        analytics_data = metrics_collector.get_analytics_data()
-        return analytics_data
+        analytics = await get_execution_analytics(api_key_id)
+        return {
+            "analytics": analytics,
+            "generated_at": datetime.now().isoformat()
+        }
+
     except Exception as e:
-        main_logger.error("analytics_fetch_failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to fetch analytics")
+        logger.error("Failed to get analytics", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== MONITORING ENDPOINTS ====================
+@app.delete("/admin/videos/cleanup")
+async def force_video_cleanup(
+    retention_days: Optional[int] = Query(None, description="Override retention days"),
+    admin_key = Depends(require_admin)
+):
+    """Force video cleanup (admin only)"""
+    try:
+        result = await video_service.cleanup_old_videos(retention_days)
+        logger.info("Video cleanup completed", **result)
+        return result
 
+    except Exception as e:
+        logger.error("Video cleanup failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/templates")
+async def create_custom_template(
+    template_data: dict,
+    admin_key = Depends(require_admin)
+):
+    """Create custom template (admin only)"""
+    try:
+        success = await template_service.create_custom_template(
+            name=template_data["name"],
+            description=template_data.get("description", ""),
+            script_content=template_data["script_content"],
+            category=template_data.get("category", "custom")
+        )
+
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to create template")
+
+        return {"message": "Template created successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to create template", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# MONITORING ENDPOINTS
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Comprehensive health check"""
     try:
-        health_status = await health_checker.get_health_status()
-        return health_status
-    except Exception as e:
-        main_logger.error("health_check_failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Health check failed")
+        health = await health_checker.perform_health_check()
+        return health
 
-
-@app.get("/health/quick")
-async def quick_health_check():
-    """Quick health check for load balancers"""
-    try:
-        status = await health_checker.get_quick_status()
-        return status
     except Exception as e:
-        return JSONResponse(
-            status_code=503, content={"status": "unhealthy", "error": str(e)}
+        logger.error("Health check failed", error=str(e))
+        # Return unhealthy status instead of error
+        return HealthResponse(
+            status="unhealthy",
+            timestamp=datetime.now(),
+            services={"database": False, "browser_pool": False, "queue": False, "disk_space": False},
+            metrics={
+                "active_executions": 0, "queue_size": 0, "total_api_keys": 0,
+                "videos_stored": 0, "disk_usage_gb": 0.0, "memory_usage_mb": 0,
+                "cpu_usage_percent": 0.0, "uptime_seconds": 0
+            },
+            browser_pool={"total_browsers": 0, "available_browsers": 0, "warm_browsers": 0}
         )
 
 
 @app.get("/metrics")
 async def get_metrics():
-    """Prometheus metrics endpoint"""
+    """Get Prometheus-style metrics"""
     try:
-        metrics_data = metrics_collector.get_prometheus_metrics()
-        return Response(
-            content=metrics_data, media_type="text/plain; version=0.0.4; charset=utf-8"
-        )
-    except Exception as e:
-        main_logger.error("metrics_fetch_failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to fetch metrics")
-
-
-@app.get("/queue/status", response_model=Dict[str, Any])
-async def get_queue_status(api_key: ApiKeyResponse = Depends(require_execute_scope)):
-    """Get current queue status"""
-    try:
-        metrics_collector.record_api_request(api_key.id, "queue_status")
+        health = await health_checker.perform_health_check()
         queue_status = await executor.get_queue_status()
-        return queue_status
+
+        metrics = []
+
+        # Queue metrics
+        metrics.append(f"playwright_queue_size {queue_status['total_queued']}")
+        metrics.append(f"playwright_active_executions {queue_status['total_running']}")
+
+        # System metrics
+        metrics.append(f"playwright_memory_usage_mb {health.metrics.memory_usage_mb}")
+        metrics.append(f"playwright_cpu_usage_percent {health.metrics.cpu_usage_percent}")
+        metrics.append(f"playwright_disk_usage_gb {health.metrics.disk_usage_gb}")
+
+        # Service health
+        for service, healthy in health.services.dict().items():
+            metrics.append(f"playwright_service_healthy{{service=\"{service}\"}} {1 if healthy else 0}")
+
+        return "\n".join(metrics)
+
     except Exception as e:
-        main_logger.error("queue_status_failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to get queue status")
+        logger.error("Failed to get metrics", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== DASHBOARD ENDPOINTS ====================
-
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(
-    request: Request, api_key: ApiKeyResponse = Depends(require_dashboard_scope)
-):
-    """Main dashboard page"""
-    return await dashboard_manager.render_dashboard(request, api_key)
-
-
-@app.get("/dashboard/data")
-async def dashboard_data(api_key: ApiKeyResponse = Depends(require_dashboard_scope)):
-    """Get dashboard data as JSON"""
+@app.get("/queue/status")
+async def get_queue_status(api_key = Depends(get_current_api_key)):
+    """Get queue status"""
     try:
-        data = await dashboard_manager.get_dashboard_data(api_key)
-        return data
+        status = await executor.get_queue_status()
+        return status
+
     except Exception as e:
-        main_logger.error("dashboard_data_failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to fetch dashboard data")
+        logger.error("Failed to get queue status", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== VIDEO ENDPOINTS ====================
-
+# VIDEO ENDPOINTS
 
 @app.get("/video/{request_id}/{api_key_value}")
 async def get_video(request_id: str, api_key_value: str):
-    """Get video file with access control"""
+    """Serve video file"""
     try:
         # Validate API key
-        api_key = await auth_manager.get_api_key(api_key_value)
+        from app.database import get_api_key_by_value
+        api_key = await get_api_key_by_value(api_key_value)
         if not api_key or not api_key.is_active:
             raise HTTPException(status_code=401, detail="Invalid API key")
 
-        # Check if user can access this video
-        video_content = await video_manager.serve_video(request_id, api_key.id)
-        if not video_content:
-            raise HTTPException(
-                status_code=404, detail="Video not found or access denied"
-            )
+        # Check if API key has video access
+        if "videos" not in api_key.scopes and "admin" not in api_key.scopes:
+            raise HTTPException(status_code=403, detail="No video access")
 
-        content, media_type = video_content
+        # Get video file
+        video_path = await video_service.serve_video_file(request_id)
+        if not video_path:
+            raise HTTPException(status_code=404, detail="Video not found")
 
-        return StreamingResponse(
-            io.BytesIO(content),
-            media_type=media_type,
-            headers={
-                "Content-Disposition": f"inline; filename={request_id}.webm",
-                "Cache-Control": "private, max-age=3600",
-            },
+        return FileResponse(
+            path=video_path,
+            media_type="video/webm",
+            filename=f"{request_id}.webm"
         )
 
     except HTTPException:
         raise
     except Exception as e:
-        main_logger.error("video_serve_failed", request_id=request_id, error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to serve video")
+        logger.error("Failed to serve video", request_id=request_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/video/{request_id}/info", response_model=VideoInfo)
 async def get_video_info(
-    request_id: str, api_key: ApiKeyResponse = Depends(require_videos_scope)
+    request_id: str,
+    api_key = Depends(require_videos)
 ):
     """Get video metadata"""
     try:
-        # Check access
-        if not await video_manager.validate_video_access(request_id, api_key.id):
-            raise HTTPException(status_code=403, detail="Access denied")
-
-        video_info = await video_manager.get_video_info(request_id)
+        video_info = await video_service.get_video_info(request_id)
         if not video_info:
             raise HTTPException(status_code=404, detail="Video not found")
 
@@ -523,79 +493,147 @@ async def get_video_info(
     except HTTPException:
         raise
     except Exception as e:
-        main_logger.error("video_info_failed", request_id=request_id, error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to get video info")
+        logger.error("Failed to get video info", request_id=request_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/admin/videos/cleanup")
-async def force_video_cleanup(admin_key: ApiKeyResponse = Depends(require_admin_scope)):
-    """Force video cleanup"""
+# DASHBOARD ENDPOINT
+
+@app.get("/dashboard")
+async def dashboard(
+    request: Request,
+    api_key_value: str = Query(..., description="API key for dashboard access")
+):
+    """Web dashboard (requires API key parameter)"""
     try:
-        result = await video_manager.cleanup_old_videos(force=True)
+        # Validate API key
+        from app.database import get_api_key_by_value
+        api_key = await get_api_key_by_value(api_key_value)
+        if not api_key or not api_key.is_active:
+            raise HTTPException(status_code=401, detail="Invalid API key")
 
-        main_logger.info(
-            "video_cleanup_forced",
-            admin_key_id=admin_key.id,
-            deleted_files=result.get("deleted_files", 0),
-        )
+        # Check dashboard access
+        if "dashboard" not in api_key.scopes and "admin" not in api_key.scopes:
+            raise HTTPException(status_code=403, detail="No dashboard access")
 
-        return result
+        # Get dashboard data
+        health = await health_checker.get_detailed_status()
+        queue_status = await executor.get_queue_status()
+        video_stats = await video_service.get_storage_stats()
 
+        dashboard_data = {
+            "api_key": api_key,
+            "health": health,
+            "queue": queue_status,
+            "videos": video_stats,
+            "refresh_interval": settings.DASHBOARD_REFRESH_INTERVAL
+        }
+
+        if templates:
+            return templates.TemplateResponse("dashboard.html", {
+                "request": request,
+                "data": dashboard_data
+            })
+        else:
+            # Return JSON if no templates
+            return JSONResponse(dashboard_data)
+
+    except HTTPException:
+        raise
     except Exception as e:
-        main_logger.error("video_cleanup_failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to cleanup videos")
+        logger.error("Dashboard error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== DIAGNOSTIC ENDPOINTS ====================
+# WEBHOOK TESTING
 
-
-@app.get("/admin/diagnostics")
-async def run_diagnostics(admin_key: ApiKeyResponse = Depends(require_admin_scope)):
-    """Run comprehensive system diagnostics"""
+@app.post("/admin/webhook/test")
+async def test_webhook_endpoint(
+    webhook_data: dict,
+    admin_key = Depends(require_admin)
+):
+    """Test webhook endpoint (admin only)"""
     try:
-        diagnostics = await health_checker.run_diagnostic()
-        return diagnostics
+        webhook_url = webhook_data.get("webhook_url")
+        if not webhook_url:
+            raise HTTPException(status_code=400, detail="webhook_url required")
+
+        # Validate URL
+        validation = await webhook_service.validate_webhook_url(webhook_url)
+        if not validation["valid"]:
+            return {"validation": validation, "test_result": None}
+
+        # Test webhook
+        test_result = await webhook_service.test_webhook(webhook_url, admin_key.id)
+
+        return {
+            "validation": validation,
+            "test_result": test_result
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
-        main_logger.error("diagnostics_failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to run diagnostics")
+        logger.error("Webhook test failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== ERROR HANDLERS ====================
-
+# ERROR HANDLERS
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    """Custom HTTP exception handler"""
-    main_logger.warning(
-        "http_exception",
-        status_code=exc.status_code,
-        detail=exc.detail,
-        path=request.url.path,
-    )
-
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail, "timestamp": datetime.now().isoformat()},
+        content={
+            "error": exc.detail,
+            "timestamp": datetime.now().isoformat(),
+            "path": str(request.url.path)
+        }
     )
 
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
-    """Handle unexpected exceptions"""
-    main_logger.error("unhandled_exception", error=str(exc), path=request.url.path)
+    logger.error("Unhandled exception",
+                path=str(request.url.path),
+                method=request.method,
+                error=str(exc),
+                error_type=type(exc).__name__)
 
     return JSONResponse(
         status_code=500,
         content={
-            "detail": "Internal server error",
+            "error": "Internal server error",
             "timestamp": datetime.now().isoformat(),
-        },
+            "path": str(request.url.path)
+        }
     )
 
 
-# ==================== MAIN ====================
+# Root endpoint
+@app.get("/")
+async def root():
+    """Root endpoint with API information"""
+    return {
+        "name": "Playwright Automation Server",
+        "version": "1.0.0",
+        "status": "running",
+        "timestamp": datetime.now().isoformat(),
+        "endpoints": {
+            "docs": "/docs",
+            "health": "/health",
+            "execute": "/execute",
+            "templates": "/templates",
+            "dashboard": "/dashboard?api_key=<your_key>"
+        }
+    }
+
 
 if __name__ == "__main__":
     uvicorn.run(
-        "app.main:app", host="0.0.0.0", port=8000, reload=False, log_level="info"
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=False,
+        log_level="info"
     )

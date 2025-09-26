@@ -1,175 +1,248 @@
-import structlog
-import logging
 import sys
+import json
 from datetime import datetime
 from typing import Any, Dict
+import structlog
+from structlog.stdlib import LoggerFactory
+
+
+def add_timestamp(logger, method_name, event_dict):
+    """Add timestamp to log entries"""
+    event_dict["timestamp"] = datetime.utcnow().isoformat() + "Z"
+    return event_dict
+
+
+def add_logger_name(logger, method_name, event_dict):
+    """Add logger name to log entries"""
+    event_dict["logger"] = logger.name
+    return event_dict
+
+
+def serialize_datetime(obj):
+    """JSON serializer for datetime objects"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+
+def json_serializer(obj: Dict[str, Any], **kwargs) -> str:
+    """Custom JSON serializer"""
+    return json.dumps(obj, default=serialize_datetime, ensure_ascii=False)
 
 
 def setup_logging():
-    """Configure structured logging"""
-
-    # Configure structlog
+    """Setup structured logging"""
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,
             structlog.stdlib.add_logger_name,
             structlog.stdlib.add_log_level,
-            structlog.stdlib.PositionalArgumentsFormatter(),
-            structlog.processors.TimeStamper(fmt="iso"),
+            add_timestamp,
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),
-            structlog.processors.JSONRenderer(),
+            structlog.processors.JSONRenderer(serializer=json_serializer)
         ],
         context_class=dict,
-        logger_factory=structlog.stdlib.LoggerFactory(),
+        logger_factory=LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
 
-    # Configure standard library logging
-    logging.basicConfig(
-        format="%(message)s",
-        stream=sys.stdout,
-        level=logging.INFO,
-    )
 
+class RequestLogger:
+    """Custom request logger for FastAPI"""
 
-class Logger:
-    def __init__(self, name: str):
-        self.logger = structlog.get_logger(name)
+    def __init__(self):
+        self.logger = structlog.get_logger("request")
 
-    def info(self, event: str, **kwargs):
-        self.logger.info(event, **kwargs)
+    async def log_request(self, request, call_next):
+        """Log HTTP requests"""
+        start_time = datetime.utcnow()
 
-    def error(self, event: str, **kwargs):
-        self.logger.error(event, **kwargs)
-
-    def warning(self, event: str, **kwargs):
-        self.logger.warning(event, **kwargs)
-
-    def debug(self, event: str, **kwargs):
-        self.logger.debug(event, **kwargs)
-
-    def execution_start(
-        self,
-        request_id: str,
-        api_key_id: int,
-        script_hash: str,
-        queue_position: int,
-        priority: int,
-        estimated_duration: int = None,
-        tags: list = None,
-    ):
+        # Log request start
         self.logger.info(
-            "script_execution_start",
-            request_id=request_id,
-            api_key_id=api_key_id,
-            script_hash=script_hash,
-            queue_position=queue_position,
-            priority=priority,
-            estimated_duration=estimated_duration,
-            tags=tags or [],
+            "Request started",
+            method=request.method,
+            url=str(request.url),
+            client_ip=self._get_client_ip(request),
+            user_agent=request.headers.get("user-agent", "unknown")
         )
 
-    def execution_complete(
-        self,
-        request_id: str,
-        success: bool,
-        execution_time: float,
-        memory_peak_mb: float = None,
-        cpu_time_ms: int = None,
-        video_size_mb: float = None,
-        error: str = None,
-    ):
+        try:
+            response = await call_next(request)
+            end_time = datetime.utcnow()
+            duration = (end_time - start_time).total_seconds()
+
+            # Log request completion
+            self.logger.info(
+                "Request completed",
+                method=request.method,
+                url=str(request.url),
+                status_code=response.status_code,
+                duration_seconds=duration,
+                client_ip=self._get_client_ip(request)
+            )
+
+            return response
+
+        except Exception as e:
+            end_time = datetime.utcnow()
+            duration = (end_time - start_time).total_seconds()
+
+            # Log request error
+            self.logger.error(
+                "Request failed",
+                method=request.method,
+                url=str(request.url),
+                duration_seconds=duration,
+                client_ip=self._get_client_ip(request),
+                error=str(e),
+                error_type=type(e).__name__
+            )
+
+            raise
+
+    def _get_client_ip(self, request) -> str:
+        """Extract client IP from request"""
+        x_forwarded_for = request.headers.get("X-Forwarded-For")
+        if x_forwarded_for:
+            return x_forwarded_for.split(",")[0].strip()
+
+        x_real_ip = request.headers.get("X-Real-IP")
+        if x_real_ip:
+            return x_real_ip
+
+        return request.client.host if request.client else "unknown"
+
+
+class ExecutionLogger:
+    """Logger for script executions"""
+
+    def __init__(self):
+        self.logger = structlog.get_logger("executor")
+
+    def log_execution_start(self, request_id: str, api_key_id: int, script_hash: str,
+                           queue_position: int, priority: int, tags: list):
+        """Log execution start"""
         self.logger.info(
-            "script_execution_complete",
+            "Script execution started",
+            event="script_execution_start",
+            request_id=request_id,
+            api_key_id=api_key_id,
+            script_hash=script_hash[:16] + "...",
+            queue_position=queue_position,
+            priority=priority,
+            tags=tags
+        )
+
+    def log_execution_complete(self, request_id: str, success: bool, execution_time: float,
+                              error: str = None, result_size: int = 0):
+        """Log execution completion"""
+        self.logger.info(
+            "Script execution completed",
+            event="script_execution_complete",
             request_id=request_id,
             success=success,
             execution_time=execution_time,
-            memory_peak_mb=memory_peak_mb,
-            cpu_time_ms=cpu_time_ms,
-            video_size_mb=video_size_mb,
             error=error,
+            result_size_bytes=result_size
         )
 
-    def queue_event(
-        self,
-        event_type: str,
-        queue_size: int,
-        active_executions: int,
-        request_id: str = None,
-        priority: int = None,
-    ):
+    def log_queue_event(self, event: str, queue_size: int, active_executions: int, **kwargs):
+        """Log queue events"""
         self.logger.info(
-            f"queue_{event_type}",
+            f"Queue {event}",
+            event=f"queue_{event}",
             queue_size=queue_size,
             active_executions=active_executions,
-            request_id=request_id,
-            priority=priority,
+            **kwargs
         )
 
-    def browser_event(
-        self,
-        event_type: str,
-        browser_id: str = None,
-        context_id: str = None,
-        pool_size: int = None,
-        available_browsers: int = None,
-    ):
+    def log_browser_event(self, event: str, browser_id: str = None, **kwargs):
+        """Log browser pool events"""
         self.logger.info(
-            f"browser_{event_type}",
+            f"Browser {event}",
+            event=f"browser_{event}",
             browser_id=browser_id,
-            context_id=context_id,
-            pool_size=pool_size,
-            available_browsers=available_browsers,
+            **kwargs
         )
 
-    def api_request(
-        self,
-        method: str,
-        endpoint: str,
-        api_key_id: int,
-        status_code: int,
-        response_time_ms: float,
-        request_id: str = None,
-    ):
+    def log_video_event(self, event: str, request_id: str, video_path: str = None,
+                       video_size_mb: float = None, **kwargs):
+        """Log video recording events"""
         self.logger.info(
-            "api_request",
-            method=method,
-            endpoint=endpoint,
-            api_key_id=api_key_id,
-            status_code=status_code,
-            response_time_ms=response_time_ms,
+            f"Video {event}",
+            event=f"video_{event}",
             request_id=request_id,
+            video_path=video_path,
+            video_size_mb=video_size_mb,
+            **kwargs
         )
 
-    def security_event(
-        self,
-        event_type: str,
-        api_key_id: int = None,
-        ip_address: str = None,
-        details: Dict[str, Any] = None,
-    ):
+
+class SystemLogger:
+    """Logger for system events"""
+
+    def __init__(self):
+        self.logger = structlog.get_logger("system")
+
+    def log_startup(self, component: str, **kwargs):
+        """Log component startup"""
+        self.logger.info(
+            f"{component} started",
+            event="component_startup",
+            component=component,
+            **kwargs
+        )
+
+    def log_shutdown(self, component: str, **kwargs):
+        """Log component shutdown"""
+        self.logger.info(
+            f"{component} stopped",
+            event="component_shutdown",
+            component=component,
+            **kwargs
+        )
+
+    def log_health_check(self, component: str, healthy: bool, **kwargs):
+        """Log health check results"""
+        level = "info" if healthy else "warning"
+        getattr(self.logger, level)(
+            f"{component} health check",
+            event="health_check",
+            component=component,
+            healthy=healthy,
+            **kwargs
+        )
+
+    def log_cleanup(self, cleaned_items: int, cleaned_size_mb: float = None, **kwargs):
+        """Log cleanup operations"""
+        self.logger.info(
+            "Cleanup completed",
+            event="cleanup_complete",
+            cleaned_items=cleaned_items,
+            cleaned_size_mb=cleaned_size_mb,
+            **kwargs
+        )
+
+    def log_resource_warning(self, resource: str, current_value: float, threshold: float, **kwargs):
+        """Log resource usage warnings"""
         self.logger.warning(
-            f"security_{event_type}",
-            api_key_id=api_key_id,
-            ip_address=ip_address,
-            details=details or {},
+            f"High {resource} usage",
+            event="resource_warning",
+            resource=resource,
+            current_value=current_value,
+            threshold=threshold,
+            **kwargs
         )
 
-    def system_event(self, event_type: str, **kwargs):
-        self.logger.info(f"system_{event_type}", **kwargs)
+
+# Global logger instances
+request_logger = RequestLogger()
+execution_logger = ExecutionLogger()
+system_logger = SystemLogger()
 
 
-# Initialize logging
+# Initialize logging on import
 setup_logging()
-
-# Global loggers for different components
-main_logger = Logger("main")
-executor_logger = Logger("executor")
-auth_logger = Logger("auth")
-video_logger = Logger("video")
-dashboard_logger = Logger("dashboard")
-cleanup_logger = Logger("cleanup")
-webhook_logger = Logger("webhook")
