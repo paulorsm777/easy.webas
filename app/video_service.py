@@ -22,20 +22,19 @@ class VideoService:
 
     async def initialize(self):
         """Initialize video service"""
-        # Create video directories
+        # Create video directory
         self.base_video_path.mkdir(parents=True, exist_ok=True)
-
-        # Create base video directory only
-        pass
 
         logger.info("Video service initialized", base_path=str(self.base_video_path))
 
     def get_video_path(self, request_id: str, date: Optional[datetime] = None) -> Path:
         """Get video file path for a request"""
+        # Using flat structure now, date parameter kept for compatibility
         return self.base_video_path / f"{request_id}.webm"
 
     def get_video_directory(self, date: Optional[datetime] = None) -> Path:
-        """Get video directory for a specific date"""
+        """Get video directory"""
+        # Using flat structure now, date parameter kept for compatibility
         return self.base_video_path
 
     async def save_video_info(
@@ -90,9 +89,12 @@ class VideoService:
 
     async def find_video_file(self, request_id: str) -> Optional[str]:
         """Find video file by request ID"""
-        video_path = self.get_video_path(request_id)
+        # Search in flat structure
+        video_path = self.base_video_path / f"{request_id}.webm"
+
         if video_path.exists():
             return str(video_path)
+
         return None
 
     async def serve_video_file(self, request_id: str) -> Optional[str]:
@@ -133,14 +135,19 @@ class VideoService:
         errors = []
 
         try:
-            # Check all video files directly in the base directory
+            # Walk through videos in flat structure
             for video_file in self.base_video_path.glob("*.webm"):
+                if not video_file.is_file():
+                    continue
+
                 try:
-                    stat = video_file.stat()
-                    file_date = datetime.fromtimestamp(stat.st_ctime)
+                    # Check file creation date
+                    file_stat = video_file.stat()
+                    file_date = datetime.fromtimestamp(file_stat.st_ctime)
 
                     if file_date < cutoff_date:
-                        file_size = stat.st_size / 1024 / 1024
+                        # Delete old video
+                        file_size = file_stat.st_size / 1024 / 1024
                         video_file.unlink()
                         deleted_count += 1
                         deleted_size_mb += file_size
@@ -181,7 +188,7 @@ class VideoService:
         newest_video = None
 
         try:
-            for video_file in self.base_video_path.glob("*.webm"):
+            for video_file in self.base_video_path.rglob("*.webm"):
                 if video_file.is_file():
                     stat = video_file.stat()
                     total_files += 1
@@ -208,41 +215,36 @@ class VideoService:
     async def list_videos_by_date(
         self, date: datetime, limit: int = 100
     ) -> List[Dict[str, Any]]:
-        """List videos for a specific date"""
+        """List videos created on a specific date"""
         videos = []
 
+        # Get date range (start and end of the day)
+        start_of_day = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_of_day = start_of_day + timedelta(days=1)
+
         try:
-            # Filter videos by creation date
-            video_files = []
-            for video_file in self.base_video_path.glob("*.webm"):
+            # Get all video files
+            all_video_files = list(self.base_video_path.glob("*.webm"))
+
+            for video_file in all_video_files:
                 try:
                     stat = video_file.stat()
-                    file_date = datetime.fromtimestamp(stat.st_ctime).date()
-                    if file_date == date.date():
-                        video_files.append(video_file)
-                except Exception:
-                    continue
+                    file_date = datetime.fromtimestamp(stat.st_ctime)
 
-            # Limit results
-            video_files = video_files[:limit]
+                    # Check if file was created on the specified date
+                    if start_of_day <= file_date < end_of_day:
+                        request_id = video_file.stem
 
-            for video_file in video_files:
-                try:
-                    stat = video_file.stat()
-                    request_id = video_file.stem
-
-                    videos.append(
-                        {
-                            "request_id": request_id,
-                            "file_path": str(video_file),
-                            "size_mb": round(stat.st_size / 1024 / 1024, 2),
-                            "created_at": datetime.fromtimestamp(
-                                stat.st_ctime
-                            ).isoformat(),
-                            "width": settings.VIDEO_WIDTH,
-                            "height": settings.VIDEO_HEIGHT,
-                        }
-                    )
+                        videos.append(
+                            {
+                                "request_id": request_id,
+                                "file_path": str(video_file),
+                                "size_mb": round(stat.st_size / 1024 / 1024, 2),
+                                "created_at": file_date.isoformat(),
+                                "width": settings.VIDEO_WIDTH,
+                                "height": settings.VIDEO_HEIGHT,
+                            }
+                        )
 
                 except Exception as e:
                     logger.error(
@@ -254,13 +256,16 @@ class VideoService:
         except Exception as e:
             logger.error("Failed to list videos", date=date.isoformat(), error=str(e))
 
-        return sorted(videos, key=lambda x: x["created_at"], reverse=True)
+        # Sort by creation time (newest first) and limit
+        videos.sort(key=lambda x: x["created_at"], reverse=True)
+        return videos[:limit]
 
     async def get_recent_videos(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Get most recent videos across all dates"""
-        videos = []
+        """Get most recent videos"""
+        all_videos = []
 
         try:
+            # Get all video files from flat structure
             video_files = list(self.base_video_path.glob("*.webm"))
 
             for video_file in video_files:
@@ -268,7 +273,7 @@ class VideoService:
                     stat = video_file.stat()
                     request_id = video_file.stem
 
-                    videos.append(
+                    all_videos.append(
                         {
                             "request_id": request_id,
                             "file_path": str(video_file),
@@ -280,7 +285,6 @@ class VideoService:
                             "height": settings.VIDEO_HEIGHT,
                         }
                     )
-
                 except Exception as e:
                     logger.error(
                         "Failed to process video file",
@@ -292,8 +296,8 @@ class VideoService:
             logger.error("Failed to get recent videos", error=str(e))
 
         # Sort by creation time and limit
-        videos.sort(key=lambda x: x["created_at"], reverse=True)
-        return videos[:limit]
+        all_videos.sort(key=lambda x: x["created_at"], reverse=True)
+        return all_videos[:limit]
 
     async def validate_video_access(self, request_id: str, api_key_id: int) -> bool:
         """Validate that API key can access specific video"""

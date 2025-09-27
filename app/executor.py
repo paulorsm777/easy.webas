@@ -5,6 +5,8 @@ import json
 import time
 import psutil
 import ast
+import os
+import shutil
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import dataclass, field
@@ -464,8 +466,19 @@ class PlaywrightExecutor:
 
             execution_time = time.time() - start_time
 
-            # Get video path
-            video_path = await self._get_video_path(context)
+            # Close context to save video and get path
+            if page.video:
+                video_path = await page.video.path()
+                # Rename video to use request_id
+                if video_path and os.path.exists(video_path):
+                    import shutil
+
+                    new_video_path = f"./data/videos/{request_id}.webm"
+                    shutil.move(video_path, new_video_path)
+                    video_path = new_video_path
+            else:
+                video_path = None
+
             video_size_mb = await self._get_video_size(video_path) if video_path else 0
 
             # Get browser info
@@ -495,6 +508,27 @@ class PlaywrightExecutor:
             )
 
         except asyncio.TimeoutError:
+            # Try to save video before closing context
+            video_path = None
+            if page and page.video:
+                try:
+                    video_path = await page.video.path()
+                    if video_path and os.path.exists(video_path):
+                        import shutil
+
+                        new_video_path = f"./data/videos/{request_id}.webm"
+                        shutil.move(video_path, new_video_path)
+                        video_path = new_video_path
+                except:
+                    pass
+
+            # Close context to save any recorded video
+            if context:
+                try:
+                    await context.close()
+                except:
+                    pass
+
             execution_time = time.time() - start_time
             await update_execution_status(
                 request_id=request_id,
@@ -502,6 +536,7 @@ class PlaywrightExecutor:
                 error_message=f"Script timed out after {queue_item.timeout} seconds",
                 execution_time=execution_time,
                 queue_wait_time=queue_wait_time,
+                video_path=video_path,
             )
 
             execution_logger.log_execution_complete(
@@ -512,6 +547,27 @@ class PlaywrightExecutor:
             )
 
         except Exception as e:
+            # Try to save video before closing context
+            video_path = None
+            if page and page.video:
+                try:
+                    video_path = await page.video.path()
+                    if video_path and os.path.exists(video_path):
+                        import shutil
+
+                        new_video_path = f"./data/videos/{request_id}.webm"
+                        shutil.move(video_path, new_video_path)
+                        video_path = new_video_path
+                except:
+                    pass
+
+            # Close context to save any recorded video
+            if context:
+                try:
+                    await context.close()
+                except:
+                    pass
+
             execution_time = time.time() - start_time
             error_message = str(e)
 
@@ -521,6 +577,7 @@ class PlaywrightExecutor:
                 error_message=error_message,
                 execution_time=execution_time,
                 queue_wait_time=queue_wait_time,
+                video_path=video_path,
             )
 
             execution_logger.log_execution_complete(
@@ -561,14 +618,12 @@ class PlaywrightExecutor:
 
         return None
 
-    async def _get_video_path(self, context: BrowserContext) -> Optional[str]:
-        """Get video path from context"""
+    async def _get_video_path(self, page) -> Optional[str]:
+        """Get video path from page"""
         try:
-            # Get video path from context
-            video_path = (
-                await context.close()
-            )  # This returns video path in some implementations
-            return video_path
+            if page.video:
+                return await page.video.path()
+            return None
         except:
             return None
 
