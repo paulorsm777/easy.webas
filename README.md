@@ -41,7 +41,7 @@ curl -X POST "http://localhost:8000/execute" \
   -H "Authorization: Bearer admin-super-secret-key-2024" \
   -H "Content-Type: application/json" \
   -d '{
-    "script": "async def main():\n    await page.goto(\"https://https://cdi-goias.smartris.com.br/ris/\")\n    title = await page.title()\n    return {\"title\": title, \"url\": page.url}",
+    "script": "from playwright.async_api import async_playwright\n\nasync def main():\n    async with async_playwright() as p:\n        browser = await p.chromium.launch()\n        page = await browser.new_page()\n        await page.goto(\"https://example.com\")\n        title = await page.title()\n        await browser.close()\n        return {\"title\": title, \"status\": \"success\"}",
     "timeout": 60,
     "priority": 3
   }'
@@ -64,7 +64,7 @@ Content-Type: application/json
 Authorization: Bearer <api-key>
 
 {
-  "script": "async def main():\n    await page.goto('https://example.com')\n    return await page.title()",
+  "script": "from playwright.async_api import async_playwright\n\nasync def main():\n    async with async_playwright() as p:\n        browser = await p.chromium.launch()\n        page = await browser.new_page()\n        await page.goto('https://example.com')\n        title = await page.title()\n        await browser.close()\n        return {\"title\": title}",
   "timeout": 60,
   "priority": 1,
   "tags": ["test", "example"],

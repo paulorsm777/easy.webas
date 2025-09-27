@@ -31,7 +31,7 @@ class ScriptRequest(BaseModel):
         description="Playwright script code to execute",
         example="""from playwright.async_api import async_playwright
 
-async def run():
+async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
@@ -39,9 +39,7 @@ async def run():
         title = await page.title()
         await page.screenshot(path='screenshot.png')
         await browser.close()
-        return {"title": title, "url": page.url}
-
-await run()""",
+        return {"title": title, "url": page.url}""",
     )
     timeout: int = Field(
         60,

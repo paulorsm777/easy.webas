@@ -182,21 +182,72 @@ async def log_requests(request: Request, call_next):
          - **Real-time status** updates via webhooks
          - **Resource monitoring** and limits
 
-         ### Example Script:
+         ### Example Scripts:
+
+         **Basic Page Navigation:**
          ```python
          from playwright.async_api import async_playwright
 
-         async def run():
+         async def main():
              async with async_playwright() as p:
                  browser = await p.chromium.launch()
                  page = await browser.new_page()
                  await page.goto('https://example.com')
                  title = await page.title()
-                 print(f'Page title: {title}')
                  await browser.close()
-                 return {"title": title}
+                 return {"title": title, "url": "https://example.com"}
+         ```
 
-         await run()
+         **Web Scraping with Screenshot:**
+         ```python
+         from playwright.async_api import async_playwright
+
+         async def main():
+             async with async_playwright() as p:
+                 browser = await p.chromium.launch()
+                 page = await browser.new_page()
+                 await page.goto('https://quotes.toscrape.com')
+
+                 # Take screenshot
+                 await page.screenshot(path='quotes.png')
+
+                 # Extract quotes
+                 quotes = await page.locator('.quote').all()
+                 result = []
+                 for quote in quotes[:3]:  # Get first 3 quotes
+                     text = await quote.locator('.text').text_content()
+                     author = await quote.locator('.author').text_content()
+                     result.append({"text": text, "author": author})
+
+                 await browser.close()
+                 return {"quotes": result, "total_found": len(quotes)}
+         ```
+
+         **Form Interaction:**
+         ```python
+         from playwright.async_api import async_playwright
+
+         async def main():
+             async with async_playwright() as p:
+                 browser = await p.chromium.launch()
+                 page = await browser.new_page()
+                 await page.goto('https://httpbin.org/forms/post')
+
+                 # Fill form
+                 await page.fill('input[name="custname"]', 'Test User')
+                 await page.fill('input[name="custtel"]', '1234567890')
+                 await page.fill('input[name="custemail"]', 'test@example.com')
+                 await page.select_option('select[name="size"]', 'medium')
+
+                 # Submit and wait for response
+                 await page.click('input[type="submit"]')
+                 await page.wait_for_load_state('networkidle')
+
+                 # Get result
+                 content = await page.text_content('body')
+
+                 await browser.close()
+                 return {"form_submitted": True, "response_preview": content[:200]}
          ```
 
          ### Response includes:
