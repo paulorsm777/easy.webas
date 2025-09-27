@@ -120,9 +120,16 @@ async def execute_script(
     """Execute a Playwright script"""
     try:
         # Validate script
+        logger.info("Script validation starting", script_preview=request.script[:100])
         validation_result = script_validator.validate_script_for_execution(request.script)
+        logger.info("Script validation completed",
+                   is_safe=validation_result["is_safe"],
+                   critical_warnings=validation_result["critical_warnings"])
 
         if not validation_result["is_safe"]:
+            logger.warning("Script validation failed",
+                         warnings=validation_result["critical_warnings"],
+                         script=request.script)
             raise HTTPException(
                 status_code=400,
                 detail={

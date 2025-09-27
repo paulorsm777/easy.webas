@@ -196,8 +196,13 @@ class ScriptValidator:
         has_main_function = any(re.search(pattern, script, re.MULTILINE | re.DOTALL)
                                for pattern in main_function_patterns)
 
+        logger.info("Main function validation",
+                   script_preview=script[:100],
+                   has_main_function=has_main_function,
+                   patterns_tested=main_function_patterns)
+
         if not has_main_function:
-            warnings.append("No 'main()' function defined - script may not execute properly")
+            warnings.append("Script must contain an async main() function")
 
         # Check for infinite loops patterns
         infinite_patterns = [

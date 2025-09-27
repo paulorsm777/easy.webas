@@ -255,18 +255,23 @@
                 <h3>📊 Execution Queue</h3>
                 <div class="metric">
                     <span class="metric-label">Active Executions</span>
-                    <span class="metric-value">{{ data.queue.total_running }}</span>
+                    <span class="metric-value" id="active-executions">{{ data.queue.total_running }}</span>
                 </div>
                 <div class="metric">
                     <span class="metric-label">Queued Scripts</span>
-                    <span class="metric-value">{{ data.queue.total_queued }}</span>
+                    <span class="metric-value" id="queued-scripts">{{ data.queue.total_queued }}</span>
                 </div>
                 <div class="metric">
                     <span class="metric-label">Est. Wait Time</span>
-                    <span class="metric-value">{{ (data.queue.estimated_wait_time / 60) | round(1) }}min</span>
+                    <span class="metric-value" id="wait-time">{{ (data.queue.estimated_wait_time / 60) | round(1) }}min</span>
                 </div>
                 <div class="progress-bar">
-                    <div class="progress-fill" style="width: {{ (data.queue.total_queued / 100 * 100) | round(0) }}%"></div>
+                    <div class="progress-fill" id="queue-progress" style="width: {{ (data.queue.total_queued / 100 * 100) | round(0) }}%"></div>
+                </div>
+                <div style="margin-top: 1rem;">
+                    <button onclick="loadQueueStatus()" style="background: #3498db; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer;">
+                        🔄 Refresh Queue Status
+                    </button>
                 </div>
             </div>
 
@@ -425,10 +430,78 @@
             event.target.classList.add('active');
         }
 
+        // Extract API key from URL
+        function getApiKeyFromUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get('api_key');
+        }
+
+        // Make authenticated API call
+        async function makeApiCall(endpoint) {
+            const apiKey = getApiKeyFromUrl();
+            if (!apiKey) {
+                console.error('No API key found in URL');
+                return null;
+            }
+
+            try {
+                const response = await fetch(endpoint, {
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                return await response.json();
+            } catch (error) {
+                console.error('API call failed:', error);
+                return null;
+            }
+        }
+
+        // Load queue status
+        async function loadQueueStatus() {
+            const data = await makeApiCall('/queue/status');
+            if (data) {
+                updateQueueDisplay(data);
+            }
+        }
+
+        // Update queue display
+        function updateQueueDisplay(queueData) {
+            // Update queue metrics
+            const activeExecutions = document.getElementById('active-executions');
+            const queuedScripts = document.getElementById('queued-scripts');
+            const waitTime = document.getElementById('wait-time');
+            const queueProgress = document.getElementById('queue-progress');
+
+            if (activeExecutions) {
+                activeExecutions.textContent = queueData.total_running || 0;
+            }
+            if (queuedScripts) {
+                queuedScripts.textContent = queueData.total_queued || 0;
+            }
+            if (waitTime) {
+                waitTime.textContent = `${((queueData.estimated_wait_time || 0) / 60).toFixed(1)}min`;
+            }
+
+            // Update progress bar
+            if (queueProgress && queueData.total_queued !== undefined) {
+                const percentage = Math.min((queueData.total_queued / 10) * 100, 100);
+                queueProgress.style.width = `${percentage}%`;
+            }
+
+            console.log('Queue status updated:', queueData);
+        }
+
         // Auto-refresh functionality
         function refreshDashboard() {
-            const currentUrl = new URL(window.location);
-            window.location.reload();
+            loadQueueStatus();
+            updateLastUpdated();
         }
 
         // Update last updated time
@@ -443,8 +516,14 @@
         // Update the last updated time every second
         setInterval(updateLastUpdated, 1000);
 
+        // Initialize dashboard
+        function initializeDashboard() {
+            updateLastUpdated();
+            loadQueueStatus(); // Load initial queue status
+        }
+
         // Update on page load
-        updateLastUpdated();
+        initializeDashboard();
     </script>
 </body>
 </html>

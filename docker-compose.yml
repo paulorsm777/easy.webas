@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   playwright-server:
@@ -52,7 +52,7 @@ services:
       - SCRIPT_TIMEOUT_GRACE_PERIOD=30
     volumes:
       - ./data:/app/data
-      - /dev/shm:/dev/shm  # Shared memory for browser performance
+      - /dev/shm:/dev/shm # Shared memory for browser performance
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -64,10 +64,10 @@ services:
       resources:
         limits:
           memory: 2G
-          cpus: '1.0'
+          cpus: "1.0"
         reservations:
           memory: 512M
-          cpus: '0.25'
+          cpus: "0.25"
     # Security options
     security_opt:
       - no-new-privileges:true
@@ -87,14 +87,14 @@ services:
       - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro  # SSL certificates if needed
+      - ./ssl:/etc/nginx/ssl:ro # SSL certificates if needed
     depends_on:
       - playwright-server
     restart: unless-stopped
     networks:
       - playwright-network
     profiles:
-      - production  # Only start with --profile production
+      - production # Only start with --profile production
 
   # Optional: Monitoring with Prometheus
   prometheus:
@@ -106,19 +106,19 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
-      - '--web.enable-lifecycle'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--storage.tsdb.retention.time=200h"
+      - "--web.enable-lifecycle"
     depends_on:
       - playwright-server
     restart: unless-stopped
     networks:
       - playwright-network
     profiles:
-      - monitoring  # Only start with --profile monitoring
+      - monitoring # Only start with --profile monitoring
 
   # Optional: Grafana for visualization
   grafana:
@@ -138,7 +138,7 @@ services:
     networks:
       - playwright-network
     profiles:
-      - monitoring  # Only start with --profile monitoring
+      - monitoring # Only start with --profile monitoring
 
 networks:
   playwright-network:
