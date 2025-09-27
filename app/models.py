@@ -25,12 +25,49 @@ class WebhookStatus(str, Enum):
 
 
 class ScriptRequest(BaseModel):
-    script: str = Field(..., max_length=50000, description="Playwright script code")
-    timeout: int = Field(60, ge=10, le=600, description="Execution timeout in seconds")
-    webhook_url: Optional[str] = Field(None, description="Callback URL for notifications")
-    priority: int = Field(1, ge=1, le=5, description="Execution priority (1-5, higher = more priority)")
-    tags: List[str] = Field(default_factory=list, description="Tags for analytics")
-    user_agent: Optional[str] = Field(None, description="Custom user agent")
+    script: str = Field(
+        ...,
+        max_length=50000,
+        description="Playwright script code to execute",
+        example="""from playwright.async_api import async_playwright
+
+async def run():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+        await page.goto('https://example.com')
+        title = await page.title()
+        await page.screenshot(path='screenshot.png')
+        await browser.close()
+        return {"title": title, "url": page.url}
+
+await run()""",
+    )
+    timeout: int = Field(
+        60,
+        ge=10,
+        le=600,
+        description="Maximum execution time in seconds (10-600)",
+        example=120,
+    )
+    webhook_url: Optional[str] = Field(
+        None,
+        description="HTTP(S) URL for execution status notifications",
+        example="https://your-app.com/webhooks/playwright",
+    )
+    priority: int = Field(
+        1, ge=1, le=5, description="Execution priority: 1=lowest, 5=highest", example=3
+    )
+    tags: List[str] = Field(
+        default_factory=list,
+        description="Custom tags for analytics and filtering",
+        example=["web-scraping", "production", "daily-report"],
+    )
+    user_agent: Optional[str] = Field(
+        None,
+        description="Custom User-Agent string for browser",
+        example="Mozilla/5.0 (compatible; MyBot/1.0)",
+    )
 
 
 class BrowserInfo(BaseModel):
@@ -48,6 +85,123 @@ class ResourceUsage(BaseModel):
 
 
 class ScriptAnalysis(BaseModel):
+    estimated_duration: int = Field(
+        description="Estimated execution time in seconds", example=45
+    )
+    complexity_score: float = Field(
+        description="Script complexity rating (0-10)", example=3.5
+    )
+    resource_requirements: Dict[str, Any] = Field(
+        description="Estimated resource usage",
+        example={"memory_mb": 256, "cpu_percent": 15, "network_requests": 5},
+    )
+    safety_score: float = Field(description="Script safety rating (0-10)", example=8.5)
+    detected_operations: List[str] = Field(
+        description="List of detected browser operations",
+        example=["navigation", "screenshot", "form_interaction", "download"],
+    )
+
+
+class ApiKeyCreate(BaseModel):
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Human-readable name for the API key",
+        example="Production Web Scraper",
+    )
+    description: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="Optional description of the key's purpose",
+        example="API key for automated daily data collection scripts",
+    )
+    scopes: List[str] = Field(
+        ...,
+        description="List of permissions granted to this key",
+        example=["execute", "videos", "dashboard"],
+    )
+    rate_limit_per_minute: int = Field(
+        30, ge=1, le=1000, description="Maximum requests per minute", example=60
+    )
+    expires_at: Optional[datetime] = Field(
+        None,
+        description="Optional expiration date (ISO format)",
+        example="2024-12-31T23:59:59Z",
+    )
+
+
+class ApiKeyUpdate(BaseModel):
+    name: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=100,
+        description="Update the key name",
+        example="Updated Production Scraper",
+    )
+    description: Optional[str] = Field(
+        None, max_length=500, description="Update the key description"
+    )
+    scopes: Optional[List[str]] = Field(
+        None, description="Update granted permissions", example=["execute", "videos"]
+    )
+    rate_limit_per_minute: Optional[int] = Field(
+        None, ge=1, le=1000, description="Update rate limit"
+    )
+    expires_at: Optional[datetime] = Field(None, description="Update expiration date")
+    is_active: Optional[bool] = Field(
+        None, description="Enable or disable the key", example=True
+    )
+
+
+class ApiKeyResponse(BaseModel):
+    id: int = Field(description="Unique key identifier", example=123)
+    name: str = Field(description="Key name", example="Production Web Scraper")
+    description: Optional[str] = Field(description="Key description")
+    key_value: Optional[str] = Field(
+        description="The actual API key (only shown on creation)",
+        example="pw_live_1234567890abcdef",
+    )
+    scopes: List[str] = Field(
+        description="Granted permissions", example=["execute", "videos"]
+    )
+    rate_limit_per_minute: int = Field(description="Rate limit", example=30)
+    is_active: bool = Field(description="Whether the key is active", example=True)
+    created_at: datetime = Field(description="Creation timestamp")
+    expires_at: Optional[datetime] = Field(description="Expiration timestamp")
+    last_used_at: Optional[datetime] = Field(description="Last usage timestamp")
+    usage_count: int = Field(description="Total number of requests", example=1547)
+
+
+class ScriptResponse(BaseModel):
+    request_id: str = Field(
+        description="Unique identifier for tracking execution",
+        example="exec_2024_03_15_14_30_45_abc123",
+    )
+    status: ExecutionStatus = Field(
+        description="Current execution status", example="queued"
+    )
+    message: str = Field(
+        description="Status message", example="Script queued successfully for execution"
+    )
+    estimated_completion: datetime = Field(
+        description="Expected completion time", example="2024-03-15T14:32:30Z"
+    )
+    queue_wait_time: float = Field(
+        description="Estimated wait time in seconds", example=45.5
+    )
+    queue_position: int = Field(description="Position in execution queue", example=3)
+    priority: int = Field(description="Execution priority level", example=3)
+    video_url: Optional[str] = Field(
+        description="URL to download video recording (available after completion)",
+        example="/video/exec_2024_03_15_14_30_45_abc123/your-api-key",
+    )
+    webhook_status: WebhookStatus = Field(
+        description="Webhook notification status", example="sent"
+    )
+    script_analysis: Optional[ScriptAnalysis] = Field(
+        description="Analysis of the submitted script"
+    )
     estimated_complexity: str
     detected_operations: List[str]
     security_warnings: List[str]

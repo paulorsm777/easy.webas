@@ -41,7 +41,7 @@ curl -X POST "http://localhost:8000/execute" \
   -H "Authorization: Bearer admin-super-secret-key-2024" \
   -H "Content-Type: application/json" \
   -d '{
-    "script": "async def main():\n    await page.goto(\"https://example.com\")\n    title = await page.title()\n    return {\"title\": title, \"url\": page.url}",
+    "script": "async def main():\n    await page.goto(\"https://https://cdi-goias.smartris.com.br/ris/\")\n    title = await page.title()\n    return {\"title\": title, \"url\": page.url}",
     "timeout": 60,
     "priority": 3
   }'

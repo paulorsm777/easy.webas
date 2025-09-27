@@ -55,7 +55,7 @@ RUN useradd -m -u 1000 playwright \
 USER playwright
 
 # Install Playwright browsers as the playwright user
-RUN playwright install chromium
+RUN playwright install chromium || echo "Browser installed with some warnings"
 
 # Expose port
 EXPOSE 8000

@@ -54,11 +54,47 @@ logger = structlog.get_logger()
 
 # Create FastAPI app
 app = FastAPI(
-    title="Playwright Automation Server",
-    description="Advanced Playwright script execution with queue management, video recording, and monitoring",
+    title="🎭 Playwright Automation Server",
+    description="""
+    ## Advanced Playwright Script Execution Platform
+
+    A comprehensive automation server that executes Playwright scripts with enterprise-grade features:
+
+    ### 🚀 Key Features
+    - **Queue Management**: Intelligent script queuing with priority support
+    - **Video Recording**: Automatic screen recording of all executions
+    - **API Key Management**: Secure access control with scoped permissions
+    - **Real-time Monitoring**: Health checks, metrics, and analytics
+    - **Template System**: Pre-built script templates for common tasks
+    - **Webhook Integration**: Real-time notifications and callbacks
+    - **Resource Management**: Memory and CPU limits with cleanup automation
+
+    ### 🔐 Authentication
+    All endpoints require API key authentication via `Authorization: Bearer <api_key>` header.
+
+    ### 📊 Current System Status
+    - **Concurrent Executions**: Up to 10 simultaneous scripts
+    - **Queue Capacity**: 100 pending executions
+    - **Video Retention**: 7 days automatic cleanup
+    - **Browser Pool**: 10 warm browsers ready for execution
+
+    ### 🎯 Quick Start
+    1. Use the default admin key: `admin-super-secret-key-2024`
+    2. Try the `/execute` endpoint with a simple script
+    3. Monitor execution via `/queue/status`
+    4. View recordings via `/video/{request_id}/{api_key}`
+    """,
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    contact={
+        "name": "Playwright Automation Team",
+        "url": "https://github.com/your-repo/easy.webas",
+    },
+    license_info={
+        "name": "MIT License",
+        "url": "https://opensource.org/licenses/MIT",
+    },
 )
 
 # Add middleware
@@ -131,7 +167,52 @@ async def log_requests(request: Request, call_next):
 # EXECUTION ENDPOINTS
 
 
-@app.post("/execute", response_model=ScriptResponse)
+@app.post(
+    "/execute",
+    response_model=ScriptResponse,
+    tags=["🎬 Script Execution"],
+    summary="Execute Playwright Script",
+    description="""
+         Execute a Playwright script with comprehensive monitoring and video recording.
+
+         ### Features:
+         - **Automatic validation** of script safety
+         - **Queue management** with priority support
+         - **Video recording** of the entire execution
+         - **Real-time status** updates via webhooks
+         - **Resource monitoring** and limits
+
+         ### Example Script:
+         ```python
+         from playwright.async_api import async_playwright
+
+         async def run():
+             async with async_playwright() as p:
+                 browser = await p.chromium.launch()
+                 page = await browser.new_page()
+                 await page.goto('https://example.com')
+                 title = await page.title()
+                 print(f'Page title: {title}')
+                 await browser.close()
+                 return {"title": title}
+
+         await run()
+         ```
+
+         ### Response includes:
+         - Unique request ID for tracking
+         - Queue position and estimated wait time
+         - Script analysis and safety validation
+         - Video recording URL (when ready)
+         """,
+    responses={
+        200: {"description": "Script queued successfully"},
+        400: {"description": "Script validation failed"},
+        401: {"description": "Invalid or missing API key"},
+        403: {"description": "Insufficient permissions"},
+        429: {"description": "Rate limit exceeded"},
+    },
+)
 async def execute_script(
     request: ScriptRequest,
     background_tasks: BackgroundTasks,
@@ -200,7 +281,27 @@ async def execute_script(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/validate")
+@app.post(
+    "/validate",
+    tags=["🎬 Script Execution"],
+    summary="Validate Script",
+    description="""
+         Validate a Playwright script without executing it.
+
+         Performs comprehensive safety and syntax analysis:
+         - **Syntax validation** and import checking
+         - **Security analysis** for potentially dangerous operations
+         - **Performance estimation** and resource requirements
+         - **Best practices** recommendations
+
+         Use this endpoint to test scripts before execution.
+         """,
+    responses={
+        200: {"description": "Validation completed"},
+        400: {"description": "Invalid script format"},
+        401: {"description": "Authentication required"},
+    },
+)
 async def validate_script(request: ScriptRequest, api_key=Depends(require_execute)):
     """Validate a script without executing it"""
     try:
@@ -225,7 +326,32 @@ async def validate_script(request: ScriptRequest, api_key=Depends(require_execut
 # TEMPLATE ENDPOINTS
 
 
-@app.get("/templates", response_model=List[ScriptTemplate])
+@app.get(
+    "/templates",
+    response_model=List[ScriptTemplate],
+    tags=["📝 Templates"],
+    summary="List Script Templates",
+    description="""
+         Get available pre-built script templates for common automation tasks.
+
+         ### Available Categories:
+         - **Web Scraping**: Data extraction from websites
+         - **UI Testing**: Automated user interface testing
+         - **Performance**: Page load and performance testing
+         - **Screenshots**: Automated screenshot capture
+         - **Forms**: Form filling and submission
+         - **Authentication**: Login and session management
+         - **Custom**: User-created templates
+
+         ### Filter Options:
+         - `category`: Filter by template category
+         - `search`: Search in template names and descriptions
+         """,
+    responses={
+        200: {"description": "Templates retrieved successfully"},
+        401: {"description": "Authentication required"},
+    },
+)
 async def get_templates(
     category: Optional[str] = Query(None, description="Filter by category"),
     search: Optional[str] = Query(None, description="Search templates"),
@@ -247,7 +373,26 @@ async def get_templates(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/templates/{template_name}", response_model=ScriptTemplate)
+@app.get(
+    "/templates/{template_name}",
+    response_model=ScriptTemplate,
+    tags=["📝 Templates"],
+    summary="Get Specific Template",
+    description="""
+         Retrieve a specific template by name with complete script content.
+
+         Returns the full template including:
+         - Complete Playwright script code
+         - Parameter descriptions and examples
+         - Usage instructions and best practices
+         - Expected outputs and return values
+         """,
+    responses={
+        200: {"description": "Template found"},
+        404: {"description": "Template not found"},
+        401: {"description": "Authentication required"},
+    },
+)
 async def get_template(template_name: str, api_key=Depends(get_current_api_key)):
     """Get specific template by name"""
     try:
@@ -269,7 +414,20 @@ async def get_template(template_name: str, api_key=Depends(get_current_api_key))
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/templates/categories")
+@app.get(
+    "/templates/categories",
+    tags=["📝 Templates"],
+    summary="Get Template Categories",
+    description="""
+         Get all available template categories with counts.
+
+         Useful for building category filters in UI applications.
+         """,
+    responses={
+        200: {"description": "Categories retrieved successfully"},
+        401: {"description": "Authentication required"},
+    },
+)
 async def get_template_categories(api_key=Depends(get_current_api_key)):
     """Get template categories with counts"""
     try:
@@ -284,7 +442,33 @@ async def get_template_categories(api_key=Depends(get_current_api_key)):
 # ADMIN ENDPOINTS
 
 
-@app.post("/admin/api-keys", response_model=ApiKeyResponse)
+@app.post(
+    "/admin/api-keys",
+    response_model=ApiKeyResponse,
+    tags=["🔐 API Key Management"],
+    summary="Create API Key",
+    description="""
+          Create a new API key with specified permissions and limits.
+
+          ### Available Scopes:
+          - `execute`: Execute scripts and view results
+          - `videos`: Access video recordings
+          - `dashboard`: View monitoring dashboard
+          - `admin`: Full administrative access
+
+          ### Rate Limiting:
+          - Default: 30 requests per minute per key
+          - Admin keys: Unlimited (configurable)
+
+          **⚠️ Admin access required**
+          """,
+    responses={
+        201: {"description": "API key created successfully"},
+        400: {"description": "Invalid key configuration"},
+        401: {"description": "Admin authentication required"},
+        403: {"description": "Insufficient permissions"},
+    },
+)
 async def create_new_api_key(key_data: ApiKeyCreate, admin_key=Depends(require_admin)):
     """Create a new API key (admin only)"""
     try:
@@ -297,7 +481,28 @@ async def create_new_api_key(key_data: ApiKeyCreate, admin_key=Depends(require_a
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/admin/api-keys", response_model=List[ApiKeyResponse])
+@app.get(
+    "/admin/api-keys",
+    response_model=List[ApiKeyResponse],
+    tags=["🔐 API Key Management"],
+    summary="List All API Keys",
+    description="""
+         Retrieve all API keys in the system with their current status.
+
+         Shows:
+         - Key metadata and permissions
+         - Usage statistics and last used timestamp
+         - Active/inactive status
+         - Expiration dates
+
+         **⚠️ Admin access required**
+         """,
+    responses={
+        200: {"description": "API keys retrieved successfully"},
+        401: {"description": "Admin authentication required"},
+        403: {"description": "Insufficient permissions"},
+    },
+)
 async def list_all_api_keys(admin_key=Depends(require_admin)):
     """List all API keys (admin only)"""
     try:
@@ -308,7 +513,30 @@ async def list_all_api_keys(admin_key=Depends(require_admin)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/admin/api-keys/{key_id}", response_model=ApiKeyResponse)
+@app.put(
+    "/admin/api-keys/{key_id}",
+    response_model=ApiKeyResponse,
+    tags=["🔐 API Key Management"],
+    summary="Update API Key",
+    description="""
+         Update an existing API key's configuration.
+
+         ### Updatable Fields:
+         - Name and description
+         - Scopes and permissions
+         - Rate limits
+         - Expiration date
+         - Active status
+
+         **⚠️ Admin access required**
+         """,
+    responses={
+        200: {"description": "API key updated successfully"},
+        404: {"description": "API key not found"},
+        401: {"description": "Admin authentication required"},
+        403: {"description": "Insufficient permissions"},
+    },
+)
 async def update_existing_api_key(
     key_id: int, update_data: ApiKeyUpdate, admin_key=Depends(require_admin)
 ):
@@ -328,7 +556,26 @@ async def update_existing_api_key(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/admin/api-keys/{key_id}")
+@app.delete(
+    "/admin/api-keys/{key_id}",
+    tags=["🔐 API Key Management"],
+    summary="Delete API Key",
+    description="""
+           Permanently delete an API key from the system.
+
+           **⚠️ Warning**: This action is irreversible!
+           - All active sessions will be terminated
+           - Associated data remains but key access is revoked
+
+           **⚠️ Admin access required**
+           """,
+    responses={
+        204: {"description": "API key deleted successfully"},
+        404: {"description": "API key not found"},
+        401: {"description": "Admin authentication required"},
+        403: {"description": "Insufficient permissions"},
+    },
+)
 async def delete_existing_api_key(key_id: int, admin_key=Depends(require_admin)):
     """Delete an API key (admin only)"""
     try:
@@ -346,7 +593,32 @@ async def delete_existing_api_key(key_id: int, admin_key=Depends(require_admin))
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/admin/analytics")
+@app.get(
+    "/admin/analytics",
+    tags=["📊 Analytics & Monitoring"],
+    summary="Get System Analytics",
+    description="""
+         Retrieve comprehensive system analytics and usage statistics.
+
+         ### Analytics Include:
+         - **Execution Statistics**: Success rates, average duration
+         - **API Usage**: Request patterns, rate limit hits
+         - **Resource Utilization**: CPU, memory, disk usage
+         - **Queue Performance**: Wait times, throughput
+         - **Error Analysis**: Common failures and patterns
+
+         ### Filtering:
+         - Filter by specific API key ID
+         - Time range filtering (last 24h, 7d, 30d)
+
+         **⚠️ Admin access required**
+         """,
+    responses={
+        200: {"description": "Analytics data retrieved successfully"},
+        401: {"description": "Admin authentication required"},
+        403: {"description": "Insufficient permissions"},
+    },
+)
 async def get_analytics(
     api_key_id: Optional[int] = Query(None, description="Filter by API key ID"),
     admin_key=Depends(require_admin),
@@ -361,7 +633,31 @@ async def get_analytics(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/admin/videos/cleanup")
+@app.delete(
+    "/admin/videos/cleanup",
+    tags=["📊 Analytics & Monitoring"],
+    summary="Force Video Cleanup",
+    description="""
+           Manually trigger video file cleanup process.
+
+           ### Cleanup Process:
+           - Removes videos older than retention period (default: 7 days)
+           - Frees up disk space
+           - Updates storage statistics
+           - Maintains execution logs
+
+           ### Options:
+           - Override default retention period
+           - Force cleanup regardless of disk space
+
+           **⚠️ Admin access required**
+           """,
+    responses={
+        200: {"description": "Cleanup completed successfully"},
+        401: {"description": "Admin authentication required"},
+        403: {"description": "Insufficient permissions"},
+    },
+)
 async def force_video_cleanup(
     retention_days: Optional[int] = Query(None, description="Override retention days"),
     admin_key=Depends(require_admin),
@@ -377,7 +673,35 @@ async def force_video_cleanup(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/admin/templates")
+@app.post(
+    "/admin/templates",
+    tags=["📝 Templates"],
+    summary="Create Custom Template",
+    description="""
+          Create a new custom script template.
+
+          ### Template Structure:
+          ```json
+          {
+            "name": "custom-template-name",
+            "description": "Template description",
+            "category": "custom",
+            "script_content": "# Playwright script here..."
+          }
+          ```
+
+          Custom templates can be reused across multiple executions and shared with other users.
+
+          **⚠️ Admin access required**
+          """,
+    responses={
+        201: {"description": "Template created successfully"},
+        400: {"description": "Invalid template format"},
+        401: {"description": "Admin authentication required"},
+        403: {"description": "Insufficient permissions"},
+        409: {"description": "Template name already exists"},
+    },
+)
 async def create_custom_template(template_data: dict, admin_key=Depends(require_admin)):
     """Create custom template (admin only)"""
     try:
@@ -403,7 +727,34 @@ async def create_custom_template(template_data: dict, admin_key=Depends(require_
 # MONITORING ENDPOINTS
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    tags=["📊 Analytics & Monitoring"],
+    summary="System Health Check",
+    description="""
+         Comprehensive system health and status check.
+
+         ### Health Metrics:
+         - **Database**: Connection and query performance
+         - **Browser Pool**: Available browsers and warm instances
+         - **Queue System**: Active executions and pending items
+         - **Disk Space**: Available storage for videos
+         - **Memory Usage**: Current system memory utilization
+         - **CPU Usage**: System load and performance
+
+         ### Status Levels:
+         - `healthy`: All systems operational
+         - `unhealthy`: Critical issues detected
+         - `degraded`: Some issues but functional
+
+         **No authentication required** - useful for monitoring tools.
+         """,
+    responses={
+        200: {"description": "Health status retrieved successfully"},
+        503: {"description": "System is unhealthy"},
+    },
+)
 async def health_check():
     """Comprehensive health check"""
     try:
@@ -440,7 +791,32 @@ async def health_check():
         )
 
 
-@app.get("/metrics")
+@app.get(
+    "/metrics",
+    tags=["📊 Analytics & Monitoring"],
+    summary="Prometheus Metrics",
+    description="""
+         Export metrics in Prometheus format for monitoring and alerting.
+
+         ### Available Metrics:
+         - `playwright_active_executions`: Current running scripts
+         - `playwright_queue_size`: Pending executions
+         - `playwright_memory_usage_mb`: System memory usage
+         - `playwright_cpu_usage_percent`: CPU utilization
+         - `playwright_disk_usage_gb`: Disk space usage
+         - `playwright_service_healthy`: Service health status
+
+         **Integration**: Configure Prometheus to scrape this endpoint.
+
+         **No authentication required** for monitoring tools.
+         """,
+    responses={
+        200: {
+            "description": "Metrics exported successfully",
+            "content": {"text/plain": {}},
+        },
+    },
+)
 async def get_metrics():
     """Get Prometheus-style metrics"""
     try:
@@ -473,7 +849,27 @@ async def get_metrics():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/queue/status")
+@app.get(
+    "/queue/status",
+    tags=["🎬 Script Execution"],
+    summary="Queue Status",
+    description="""
+         Get current execution queue status and statistics.
+
+         ### Queue Information:
+         - **Active Executions**: Scripts currently running
+         - **Pending Items**: Scripts waiting in queue
+         - **Average Wait Time**: Estimated queue processing time
+         - **Throughput**: Scripts processed per hour
+         - **Priority Distribution**: High/normal/low priority breakdown
+
+         Useful for monitoring system load and planning script execution timing.
+         """,
+    responses={
+        200: {"description": "Queue status retrieved successfully"},
+        401: {"description": "Authentication required"},
+    },
+)
 async def get_queue_status(api_key=Depends(get_current_api_key)):
     """Get queue status"""
     try:
@@ -488,7 +884,34 @@ async def get_queue_status(api_key=Depends(get_current_api_key)):
 # VIDEO ENDPOINTS
 
 
-@app.get("/video/{request_id}/{api_key_value}")
+@app.get(
+    "/video/{request_id}/{api_key_value}",
+    tags=["🎥 Video Management"],
+    summary="Download Video Recording",
+    description="""
+         Download the video recording of a script execution.
+
+         ### Video Details:
+         - **Format**: WebM with VP8 codec
+         - **Resolution**: 1280x720 (720p)
+         - **Recording**: Full browser session from start to finish
+         - **Size**: Typically 1-10MB depending on execution time
+
+         ### Access Control:
+         - Videos are accessible only to the API key that created them
+         - Admin keys can access all videos
+         - Videos auto-expire after retention period
+
+         ### Usage:
+         Use the request_id returned from `/execute` endpoint.
+         """,
+    responses={
+        200: {"description": "Video file", "content": {"video/webm": {}}},
+        401: {"description": "Invalid API key"},
+        403: {"description": "Access denied to this video"},
+        404: {"description": "Video not found or expired"},
+    },
+)
 async def get_video(request_id: str, api_key_value: str):
     """Serve video file"""
     try:
@@ -519,7 +942,30 @@ async def get_video(request_id: str, api_key_value: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/video/{request_id}/info", response_model=VideoInfo)
+@app.get(
+    "/video/{request_id}/info",
+    response_model=VideoInfo,
+    tags=["🎥 Video Management"],
+    summary="Get Video Metadata",
+    description="""
+         Get metadata and information about a video recording.
+
+         ### Video Metadata:
+         - File size and duration
+         - Recording timestamp
+         - Associated script execution details
+         - Download URL and expiration
+         - Processing status
+
+         Useful for checking if video is ready before attempting download.
+         """,
+    responses={
+        200: {"description": "Video metadata retrieved successfully"},
+        401: {"description": "Authentication required"},
+        403: {"description": "Access denied to this video"},
+        404: {"description": "Video not found"},
+    },
+)
 async def get_video_info(request_id: str, api_key=Depends(require_videos)):
     """Get video metadata"""
     try:
@@ -539,7 +985,35 @@ async def get_video_info(request_id: str, api_key=Depends(require_videos)):
 # DASHBOARD ENDPOINT
 
 
-@app.get("/dashboard")
+@app.get(
+    "/dashboard",
+    tags=["📊 Analytics & Monitoring"],
+    summary="Web Dashboard",
+    description="""
+         Access the web-based monitoring dashboard.
+
+         ### Dashboard Features:
+         - **Real-time Metrics**: Live system performance data
+         - **Queue Visualization**: Current and historical queue status
+         - **Execution History**: Recent script runs and outcomes
+         - **Resource Monitoring**: CPU, memory, and disk usage graphs
+         - **API Key Management**: Quick access to key operations
+         - **System Health**: Visual health indicators
+
+         ### Access:
+         Requires API key with `dashboard` or `admin` scope.
+
+         ### URL Format:
+         `/dashboard?api_key=your-api-key-here`
+
+         Returns HTML interface for browser viewing.
+         """,
+    responses={
+        200: {"description": "Dashboard HTML page", "content": {"text/html": {}}},
+        401: {"description": "Invalid API key"},
+        403: {"description": "Dashboard access denied"},
+    },
+)
 async def dashboard(
     request: Request,
     api_key: str = Query(..., description="API key for dashboard access"),
@@ -588,7 +1062,39 @@ async def dashboard(
 # WEBHOOK TESTING
 
 
-@app.post("/admin/webhook/test")
+@app.post(
+    "/admin/webhook/test",
+    tags=["🔗 Webhooks"],
+    summary="Test Webhook Endpoint",
+    description="""
+          Test a webhook URL for connectivity and response validation.
+
+          ### Test Process:
+          - **URL Validation**: Checks URL format and accessibility
+          - **Connectivity Test**: Attempts HTTP connection
+          - **Response Analysis**: Validates webhook response format
+          - **Security Check**: Verifies HTTPS for production webhooks
+
+          ### Request Format:
+          ```json
+          {
+            "webhook_url": "https://your-domain.com/webhook",
+            "test_data": {
+              "event": "test",
+              "message": "Webhook connectivity test"
+            }
+          }
+          ```
+
+          **⚠️ Admin access required**
+          """,
+    responses={
+        200: {"description": "Webhook test completed"},
+        400: {"description": "Invalid webhook configuration"},
+        401: {"description": "Admin authentication required"},
+        403: {"description": "Insufficient permissions"},
+    },
+)
 async def test_webhook_endpoint(webhook_data: dict, admin_key=Depends(require_admin)):
     """Test webhook endpoint (admin only)"""
     try:
