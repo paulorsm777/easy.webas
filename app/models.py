@@ -85,20 +85,31 @@ class ResourceUsage(BaseModel):
 
 
 class ScriptAnalysis(BaseModel):
-    estimated_duration: int = Field(
-        description="Estimated execution time in seconds", example=45
+    estimated_complexity: str = Field(
+        description="Estimated script complexity level", example="medium"
     )
-    complexity_score: float = Field(
-        description="Script complexity rating (0-10)", example=3.5
-    )
-    resource_requirements: Dict[str, Any] = Field(
-        description="Estimated resource usage",
-        example={"memory_mb": 256, "cpu_percent": 15, "network_requests": 5},
-    )
-    safety_score: float = Field(description="Script safety rating (0-10)", example=8.5)
     detected_operations: List[str] = Field(
         description="List of detected browser operations",
         example=["navigation", "screenshot", "form_interaction", "download"],
+    )
+    security_warnings: List[str] = Field(
+        default_factory=list,
+        description="Security warnings and recommendations",
+        example=["External URL access detected", "File download operations found"],
+    )
+    estimated_duration: Optional[int] = Field(
+        None, description="Estimated execution time in seconds", example=45
+    )
+    complexity_score: Optional[float] = Field(
+        None, description="Script complexity rating (0-10)", example=3.5
+    )
+    resource_requirements: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Estimated resource usage",
+        example={"memory_mb": 256, "cpu_percent": 15, "network_requests": 5},
+    )
+    safety_score: Optional[float] = Field(
+        None, description="Script safety rating (0-10)", example=8.5
     )
 
 
@@ -202,9 +213,6 @@ class ScriptResponse(BaseModel):
     script_analysis: Optional[ScriptAnalysis] = Field(
         description="Analysis of the submitted script"
     )
-    estimated_complexity: str
-    detected_operations: List[str]
-    security_warnings: List[str]
 
 
 class ScriptResponse(BaseModel):
