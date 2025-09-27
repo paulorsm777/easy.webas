@@ -126,8 +126,8 @@ class ExecutionLogger:
                            queue_position: int, priority: int, tags: list):
         """Log execution start"""
         self.logger.info(
-            "Script execution started",
             event="script_execution_start",
+            message="Script execution started",
             request_id=request_id,
             api_key_id=api_key_id,
             script_hash=script_hash[:16] + "...",
@@ -140,8 +140,8 @@ class ExecutionLogger:
                               error: str = None, result_size: int = 0):
         """Log execution completion"""
         self.logger.info(
-            "Script execution completed",
             event="script_execution_complete",
+            message="Script execution completed",
             request_id=request_id,
             success=success,
             execution_time=execution_time,
@@ -152,8 +152,8 @@ class ExecutionLogger:
     def log_queue_event(self, event: str, queue_size: int, active_executions: int, **kwargs):
         """Log queue events"""
         self.logger.info(
-            f"Queue {event}",
             event=f"queue_{event}",
+            message=f"Queue {event}",
             queue_size=queue_size,
             active_executions=active_executions,
             **kwargs
@@ -162,8 +162,8 @@ class ExecutionLogger:
     def log_browser_event(self, event: str, browser_id: str = None, **kwargs):
         """Log browser pool events"""
         self.logger.info(
-            f"Browser {event}",
             event=f"browser_{event}",
+            message=f"Browser {event}",
             browser_id=browser_id,
             **kwargs
         )
@@ -172,8 +172,8 @@ class ExecutionLogger:
                        video_size_mb: float = None, **kwargs):
         """Log video recording events"""
         self.logger.info(
-            f"Video {event}",
             event=f"video_{event}",
+            message=f"Video {event}",
             request_id=request_id,
             video_path=video_path,
             video_size_mb=video_size_mb,
@@ -190,8 +190,8 @@ class SystemLogger:
     def log_startup(self, component: str, **kwargs):
         """Log component startup"""
         self.logger.info(
-            f"{component} started",
             event="component_startup",
+            message=f"{component} started",
             component=component,
             **kwargs
         )
@@ -199,8 +199,8 @@ class SystemLogger:
     def log_shutdown(self, component: str, **kwargs):
         """Log component shutdown"""
         self.logger.info(
-            f"{component} stopped",
             event="component_shutdown",
+            message=f"{component} stopped",
             component=component,
             **kwargs
         )
@@ -209,8 +209,8 @@ class SystemLogger:
         """Log health check results"""
         level = "info" if healthy else "warning"
         getattr(self.logger, level)(
-            f"{component} health check",
             event="health_check",
+            message=f"{component} health check",
             component=component,
             healthy=healthy,
             **kwargs
@@ -219,8 +219,8 @@ class SystemLogger:
     def log_cleanup(self, cleaned_items: int, cleaned_size_mb: float = None, **kwargs):
         """Log cleanup operations"""
         self.logger.info(
-            "Cleanup completed",
             event="cleanup_complete",
+            message="Cleanup completed",
             cleaned_items=cleaned_items,
             cleaned_size_mb=cleaned_size_mb,
             **kwargs

@@ -97,7 +97,7 @@ async def get_current_api_key(credentials: HTTPAuthorizationCredentials = Securi
     return api_key
 
 
-async def require_scopes(required_scopes: List[str]):
+def require_scopes(required_scopes: List[str]):
     """Dependency to require specific scopes"""
     async def check_scopes(api_key: ApiKeyResponse = Depends(get_current_api_key)):
         user_scopes = api_key.scopes

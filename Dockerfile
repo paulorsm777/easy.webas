@@ -13,6 +13,17 @@ RUN apt-get update && apt-get install -y \
     gcc \
     python3-dev \
     build-essential \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libdrm2 \
+    libgtk-3-0 \
+    libgtk-4-1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libxss1 \
+    libnss3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
@@ -22,10 +33,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
-
-# Install Playwright and browsers
-RUN playwright install chromium
-RUN playwright install-deps chromium
 
 # Copy application code
 COPY . .
@@ -44,6 +51,9 @@ RUN useradd -m -u 1000 playwright \
 
 # Switch to non-root user
 USER playwright
+
+# Install Playwright and browsers as non-root user
+RUN playwright install chromium
 
 # Expose port
 EXPOSE 8000

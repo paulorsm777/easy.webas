@@ -5,6 +5,8 @@ import json
 import time
 import psutil
 import ast
+import os
+import glob
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import dataclass, field
@@ -377,6 +379,7 @@ class PlaywrightExecutor:
         context = None
         page = None
         video_path = None
+        video_size_mb = 0.0
 
         try:
             # Get browser from pool
@@ -413,10 +416,6 @@ class PlaywrightExecutor:
             cpu_time_ms = int((final_cpu_time - initial_cpu_time) * 1000)
 
             execution_time = time.time() - start_time
-
-            # Get video path
-            video_path = await self._get_video_path(context)
-            video_size_mb = await self._get_video_size(video_path) if video_path else 0
 
             # Get browser info
             browser_info = BrowserInfo(
@@ -481,12 +480,15 @@ class PlaywrightExecutor:
             )
 
         finally:
-            # Cleanup
+            # Get video path before closing context
             if context:
                 try:
-                    await context.close()
-                except:
-                    pass
+                    final_video_path = await self._get_video_path(context, request_id)
+                    if final_video_path:
+                        video_path = final_video_path
+                        video_size_mb = await self._get_video_size(video_path)
+                except Exception as e:
+                    logger.error("Failed to process video", error=str(e))
 
             if browser:
                 await self.browser_pool.return_browser(browser)
@@ -511,19 +513,35 @@ class PlaywrightExecutor:
 
         return None
 
-    async def _get_video_path(self, context: BrowserContext) -> Optional[str]:
+    async def _get_video_path(self, context: BrowserContext, request_id: str) -> Optional[str]:
         """Get video path from context"""
         try:
-            # Get video path from context
-            video_path = await context.close()  # This returns video path in some implementations
-            return video_path
-        except:
+            # Close context to finalize video recording
+            await context.close()
+
+            # Construct video file path based on Playwright's naming convention
+            video_dir = f"./data/videos/{datetime.now().strftime('%Y/%m/%d')}"
+
+            # Playwright typically saves videos with a generated name
+            # We need to find the most recent video file in the directory
+
+            # Look for video files created recently
+            video_pattern = f"{video_dir}/*.webm"
+            video_files = glob.glob(video_pattern)
+
+            if video_files:
+                # Return the most recent video file
+                latest_video = max(video_files, key=os.path.getctime)
+                return latest_video
+
+            return None
+        except Exception as e:
+            logger.error("Failed to get video path", error=str(e))
             return None
 
     async def _get_video_size(self, video_path: str) -> float:
         """Get video file size in MB"""
         try:
-            import os
             size_bytes = os.path.getsize(video_path)
             return size_bytes / 1024 / 1024
         except:
