@@ -32,14 +32,18 @@ class AuthorizationError(HTTPException):
         super().__init__(status_code=403, detail=detail)
 
 
-async def get_api_key_from_credentials(credentials: HTTPAuthorizationCredentials = Security(security)) -> ApiKeyResponse:
+async def get_api_key_from_credentials(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+) -> ApiKeyResponse:
     """Extract and validate API key from credentials"""
     if not credentials or not credentials.credentials:
         raise AuthenticationError("API key required")
 
     api_key = await get_api_key_by_value(credentials.credentials)
     if not api_key:
-        logger.warning("Invalid API key attempt", key_prefix=credentials.credentials[:8])
+        logger.warning(
+            "Invalid API key attempt", key_prefix=credentials.credentials[:8]
+        )
         raise AuthenticationError("Invalid API key")
 
     if not api_key.is_active:
@@ -47,7 +51,9 @@ async def get_api_key_from_credentials(credentials: HTTPAuthorizationCredentials
         raise AuthenticationError("API key is disabled")
 
     if api_key.expires_at and datetime.now() > api_key.expires_at:
-        logger.warning("Expired API key used", key_id=api_key.id, expires_at=api_key.expires_at)
+        logger.warning(
+            "Expired API key used", key_id=api_key.id, expires_at=api_key.expires_at
+        )
         raise AuthenticationError("API key has expired")
 
     # Update usage tracking
@@ -67,15 +73,19 @@ async def check_api_key_rate_limit(api_key: ApiKeyResponse) -> bool:
 
     # Clean old requests outside the window
     api_key_rate_limits[api_key.id] = [
-        req_time for req_time in api_key_rate_limits[api_key.id]
+        req_time
+        for req_time in api_key_rate_limits[api_key.id]
         if req_time > window_start
     ]
 
     # Check if under rate limit
     if len(api_key_rate_limits[api_key.id]) >= api_key.rate_limit_per_minute:
-        logger.warning("Rate limit exceeded", key_id=api_key.id,
-                      current_requests=len(api_key_rate_limits[api_key.id]),
-                      limit=api_key.rate_limit_per_minute)
+        logger.warning(
+            "Rate limit exceeded",
+            key_id=api_key.id,
+            current_requests=len(api_key_rate_limits[api_key.id]),
+            limit=api_key.rate_limit_per_minute,
+        )
         return False
 
     # Add current request
@@ -83,7 +93,9 @@ async def check_api_key_rate_limit(api_key: ApiKeyResponse) -> bool:
     return True
 
 
-async def get_current_api_key(credentials: HTTPAuthorizationCredentials = Security(security)) -> ApiKeyResponse:
+async def get_current_api_key(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+) -> ApiKeyResponse:
     """Get current authenticated API key with rate limiting"""
     api_key = await get_api_key_from_credentials(credentials)
 
@@ -91,14 +103,15 @@ async def get_current_api_key(credentials: HTTPAuthorizationCredentials = Securi
     if not await check_api_key_rate_limit(api_key):
         raise HTTPException(
             status_code=429,
-            detail=f"Rate limit exceeded. Maximum {api_key.rate_limit_per_minute} requests per minute."
+            detail=f"Rate limit exceeded. Maximum {api_key.rate_limit_per_minute} requests per minute.",
         )
 
     return api_key
 
 
-async def require_scopes(required_scopes: List[str]):
+def require_scopes(required_scopes: List[str]):
     """Dependency to require specific scopes"""
+
     async def check_scopes(api_key: ApiKeyResponse = Depends(get_current_api_key)):
         user_scopes = api_key.scopes
 
@@ -107,19 +120,28 @@ async def require_scopes(required_scopes: List[str]):
             return api_key
 
         # Check if user has all required scopes
-        missing_scopes = [scope for scope in required_scopes if scope not in user_scopes]
+        missing_scopes = [
+            scope for scope in required_scopes if scope not in user_scopes
+        ]
         if missing_scopes:
-            logger.warning("Insufficient scopes", key_id=api_key.id,
-                         required=required_scopes, missing=missing_scopes)
-            raise AuthorizationError(f"Missing required scopes: {', '.join(missing_scopes)}")
+            logger.warning(
+                "Insufficient scopes",
+                key_id=api_key.id,
+                required=required_scopes,
+                missing=missing_scopes,
+            )
+            raise AuthorizationError(
+                f"Missing required scopes: {', '.join(missing_scopes)}"
+            )
 
         return api_key
 
     return check_scopes
 
 
-async def require_admin():
+def require_admin():
     """Dependency to require admin access"""
+
     async def check_admin(api_key: ApiKeyResponse = Depends(get_current_api_key)):
         if "admin" not in api_key.scopes:
             logger.warning("Admin access denied", key_id=api_key.id)
@@ -149,8 +171,7 @@ class RateLimitMiddleware:
 
             # Clean old requests
             self.global_requests = [
-                req_time for req_time in self.global_requests
-                if req_time > window_start
+                req_time for req_time in self.global_requests if req_time > window_start
             ]
 
             # Check global rate limit
@@ -188,7 +209,9 @@ def get_client_ip(request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-async def validate_api_key_scopes(api_key: ApiKeyResponse, required_scopes: List[str]) -> bool:
+async def validate_api_key_scopes(
+    api_key: ApiKeyResponse, required_scopes: List[str]
+) -> bool:
     """Validate that API key has required scopes"""
     if "admin" in api_key.scopes:
         return True
@@ -196,12 +219,16 @@ async def validate_api_key_scopes(api_key: ApiKeyResponse, required_scopes: List
     return all(scope in api_key.scopes for scope in required_scopes)
 
 
-async def log_api_access(api_key: ApiKeyResponse, endpoint: str, method: str, client_ip: str):
+async def log_api_access(
+    api_key: ApiKeyResponse, endpoint: str, method: str, client_ip: str
+):
     """Log API access for audit trail"""
-    logger.info("API access",
-                key_id=api_key.id,
-                key_name=api_key.name,
-                endpoint=endpoint,
-                method=method,
-                client_ip=client_ip,
-                scopes=api_key.scopes)
+    logger.info(
+        "API access",
+        key_id=api_key.id,
+        key_name=api_key.name,
+        endpoint=endpoint,
+        method=method,
+        client_ip=client_ip,
+        scopes=api_key.scopes,
+    )

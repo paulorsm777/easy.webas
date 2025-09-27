@@ -41,7 +41,7 @@ def setup_logging():
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),
-            structlog.processors.JSONRenderer(serializer=json_serializer)
+            structlog.processors.JSONRenderer(serializer=json_serializer),
         ],
         context_class=dict,
         logger_factory=LoggerFactory(),
@@ -66,7 +66,7 @@ class RequestLogger:
             method=request.method,
             url=str(request.url),
             client_ip=self._get_client_ip(request),
-            user_agent=request.headers.get("user-agent", "unknown")
+            user_agent=request.headers.get("user-agent", "unknown"),
         )
 
         try:
@@ -81,7 +81,7 @@ class RequestLogger:
                 url=str(request.url),
                 status_code=response.status_code,
                 duration_seconds=duration,
-                client_ip=self._get_client_ip(request)
+                client_ip=self._get_client_ip(request),
             )
 
             return response
@@ -98,7 +98,7 @@ class RequestLogger:
                 duration_seconds=duration,
                 client_ip=self._get_client_ip(request),
                 error=str(e),
-                error_type=type(e).__name__
+                error_type=type(e).__name__,
             )
 
             raise
@@ -122,62 +122,74 @@ class ExecutionLogger:
     def __init__(self):
         self.logger = structlog.get_logger("executor")
 
-    def log_execution_start(self, request_id: str, api_key_id: int, script_hash: str,
-                           queue_position: int, priority: int, tags: list):
+    def log_execution_start(
+        self,
+        request_id: str,
+        api_key_id: int,
+        script_hash: str,
+        queue_position: int,
+        priority: int,
+        tags: list,
+    ):
         """Log execution start"""
         self.logger.info(
-            "Script execution started",
-            event="script_execution_start",
+            "script_execution_start",
             request_id=request_id,
             api_key_id=api_key_id,
             script_hash=script_hash[:16] + "...",
             queue_position=queue_position,
             priority=priority,
-            tags=tags
+            tags=tags,
         )
 
-    def log_execution_complete(self, request_id: str, success: bool, execution_time: float,
-                              error: str = None, result_size: int = 0):
+    def log_execution_complete(
+        self,
+        request_id: str,
+        success: bool,
+        execution_time: float,
+        error: str = None,
+        result_size: int = 0,
+    ):
         """Log execution completion"""
         self.logger.info(
-            "Script execution completed",
-            event="script_execution_complete",
+            "script_execution_complete",
             request_id=request_id,
             success=success,
             execution_time=execution_time,
             error=error,
-            result_size_bytes=result_size
+            result_size_bytes=result_size,
         )
 
-    def log_queue_event(self, event: str, queue_size: int, active_executions: int, **kwargs):
+    def log_queue_event(
+        self, event: str, queue_size: int, active_executions: int, **kwargs
+    ):
         """Log queue events"""
         self.logger.info(
-            f"Queue {event}",
-            event=f"queue_{event}",
+            f"queue_{event}",
             queue_size=queue_size,
             active_executions=active_executions,
-            **kwargs
+            **kwargs,
         )
 
     def log_browser_event(self, event: str, browser_id: str = None, **kwargs):
         """Log browser pool events"""
-        self.logger.info(
-            f"Browser {event}",
-            event=f"browser_{event}",
-            browser_id=browser_id,
-            **kwargs
-        )
+        self.logger.info(f"browser_{event}", browser_id=browser_id, **kwargs)
 
-    def log_video_event(self, event: str, request_id: str, video_path: str = None,
-                       video_size_mb: float = None, **kwargs):
+    def log_video_event(
+        self,
+        event: str,
+        request_id: str,
+        video_path: str = None,
+        video_size_mb: float = None,
+        **kwargs,
+    ):
         """Log video recording events"""
         self.logger.info(
-            f"Video {event}",
-            event=f"video_{event}",
+            f"video_{event}",
             request_id=request_id,
             video_path=video_path,
             video_size_mb=video_size_mb,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -189,52 +201,38 @@ class SystemLogger:
 
     def log_startup(self, component: str, **kwargs):
         """Log component startup"""
-        self.logger.info(
-            f"{component} started",
-            event="component_startup",
-            component=component,
-            **kwargs
-        )
+        self.logger.info("component_startup", component=component, **kwargs)
 
     def log_shutdown(self, component: str, **kwargs):
         """Log component shutdown"""
-        self.logger.info(
-            f"{component} stopped",
-            event="component_shutdown",
-            component=component,
-            **kwargs
-        )
+        self.logger.info("component_shutdown", component=component, **kwargs)
 
     def log_health_check(self, component: str, healthy: bool, **kwargs):
         """Log health check results"""
         level = "info" if healthy else "warning"
         getattr(self.logger, level)(
-            f"{component} health check",
-            event="health_check",
-            component=component,
-            healthy=healthy,
-            **kwargs
+            "health_check", component=component, healthy=healthy, **kwargs
         )
 
     def log_cleanup(self, cleaned_items: int, cleaned_size_mb: float = None, **kwargs):
         """Log cleanup operations"""
         self.logger.info(
-            "Cleanup completed",
-            event="cleanup_complete",
+            "cleanup_complete",
             cleaned_items=cleaned_items,
             cleaned_size_mb=cleaned_size_mb,
-            **kwargs
+            **kwargs,
         )
 
-    def log_resource_warning(self, resource: str, current_value: float, threshold: float, **kwargs):
+    def log_resource_warning(
+        self, resource: str, current_value: float, threshold: float, **kwargs
+    ):
         """Log resource usage warnings"""
         self.logger.warning(
-            f"High {resource} usage",
-            event="resource_warning",
+            "resource_warning",
             resource=resource,
             current_value=current_value,
             threshold=threshold,
-            **kwargs
+            **kwargs,
         )
 
 

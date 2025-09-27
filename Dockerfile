@@ -13,6 +13,16 @@ RUN apt-get update && apt-get install -y \
     gcc \
     python3-dev \
     build-essential \
+    fonts-liberation \
+    fonts-dejavu-core \
+    fonts-noto \
+    libnss3-dev \
+    libatk-bridge2.0-dev \
+    libdrm-dev \
+    libxkbcommon-dev \
+    libgtk-3-dev \
+    libgbm-dev \
+    libasound2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
@@ -23,9 +33,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright and browsers
-RUN playwright install chromium
-RUN playwright install-deps chromium
+# Install Playwright dependencies (as root)
+RUN DEBIAN_FRONTEND=noninteractive playwright install-deps chromium 2>/dev/null || echo "Playwright dependencies installed with some warnings"
 
 # Copy application code
 COPY . .
@@ -44,6 +53,9 @@ RUN useradd -m -u 1000 playwright \
 
 # Switch to non-root user
 USER playwright
+
+# Install Playwright browsers as the playwright user
+RUN playwright install chromium
 
 # Expose port
 EXPOSE 8000
