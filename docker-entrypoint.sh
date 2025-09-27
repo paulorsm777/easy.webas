@@ -11,7 +11,6 @@ fi
 # Create data directories if they don't exist
 echo "📁 Setting up data directories..."
 mkdir -p /app/data/videos
-mkdir -p /app/data/videos/$(date +%Y)/$(date +%m)/$(date +%d)
 
 # Set permissions if running as root
 if [ "$(id -u)" = "0" ]; then

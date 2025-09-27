@@ -25,29 +25,22 @@ class VideoService:
         # Create video directories
         self.base_video_path.mkdir(parents=True, exist_ok=True)
 
-        # Create date-based directory structure
-        today = datetime.now()
-        today_path = self.base_video_path / today.strftime("%Y") / today.strftime("%m") / today.strftime("%d")
-        today_path.mkdir(parents=True, exist_ok=True)
+        # Create base video directory only
+        pass
 
         logger.info("Video service initialized", base_path=str(self.base_video_path))
 
     def get_video_path(self, request_id: str, date: Optional[datetime] = None) -> Path:
         """Get video file path for a request"""
-        if not date:
-            date = datetime.now()
-
-        date_path = self.base_video_path / date.strftime("%Y") / date.strftime("%m") / date.strftime("%d")
-        return date_path / f"{request_id}.webm"
+        return self.base_video_path / f"{request_id}.webm"
 
     def get_video_directory(self, date: Optional[datetime] = None) -> Path:
         """Get video directory for a specific date"""
-        if not date:
-            date = datetime.now()
+        return self.base_video_path
 
-        return self.base_video_path / date.strftime("%Y") / date.strftime("%m") / date.strftime("%d")
-
-    async def save_video_info(self, request_id: str, video_path: str, duration_seconds: float = 0.0):
+    async def save_video_info(
+        self, request_id: str, video_path: str, duration_seconds: float = 0.0
+    ):
         """Save video information to cache"""
         try:
             if os.path.exists(video_path):
@@ -61,7 +54,7 @@ class VideoService:
                     size_mb=size_mb,
                     created_at=created_at,
                     width=settings.VIDEO_WIDTH,
-                    height=settings.VIDEO_HEIGHT
+                    height=settings.VIDEO_HEIGHT,
                 )
 
                 self.video_cache[request_id] = video_info
@@ -70,13 +63,15 @@ class VideoService:
                     "saved",
                     request_id=request_id,
                     video_path=video_path,
-                    video_size_mb=size_mb
+                    video_size_mb=size_mb,
                 )
 
                 return video_info
 
         except Exception as e:
-            logger.error("Failed to save video info", request_id=request_id, error=str(e))
+            logger.error(
+                "Failed to save video info", request_id=request_id, error=str(e)
+            )
 
         return None
 
@@ -95,14 +90,9 @@ class VideoService:
 
     async def find_video_file(self, request_id: str) -> Optional[str]:
         """Find video file by request ID"""
-        # Search in recent days (up to 7 days)
-        for days_back in range(8):
-            search_date = datetime.now() - timedelta(days=days_back)
-            video_path = self.get_video_path(request_id, search_date)
-
-            if video_path.exists():
-                return str(video_path)
-
+        video_path = self.get_video_path(request_id)
+        if video_path.exists():
+            return str(video_path)
         return None
 
     async def serve_video_file(self, request_id: str) -> Optional[str]:
@@ -122,7 +112,9 @@ class VideoService:
                 # Remove from cache
                 self.video_cache.pop(request_id, None)
 
-                execution_logger.log_video_event("deleted", request_id=request_id, video_path=video_path)
+                execution_logger.log_video_event(
+                    "deleted", request_id=request_id, video_path=video_path
+                )
                 return True
 
         except Exception as e:
@@ -141,53 +133,24 @@ class VideoService:
         errors = []
 
         try:
-            # Walk through date directories
-            for year_dir in self.base_video_path.iterdir():
-                if not year_dir.is_dir() or not year_dir.name.isdigit():
-                    continue
+            # Check all video files directly in the base directory
+            for video_file in self.base_video_path.glob("*.webm"):
+                try:
+                    stat = video_file.stat()
+                    file_date = datetime.fromtimestamp(stat.st_ctime)
 
-                for month_dir in year_dir.iterdir():
-                    if not month_dir.is_dir() or not month_dir.name.isdigit():
-                        continue
+                    if file_date < cutoff_date:
+                        file_size = stat.st_size / 1024 / 1024
+                        video_file.unlink()
+                        deleted_count += 1
+                        deleted_size_mb += file_size
 
-                    for day_dir in month_dir.iterdir():
-                        if not day_dir.is_dir() or not day_dir.name.isdigit():
-                            continue
+                        # Remove from cache
+                        request_id = video_file.stem
+                        self.video_cache.pop(request_id, None)
 
-                        # Check if this date is older than cutoff
-                        try:
-                            dir_date = datetime(
-                                year=int(year_dir.name),
-                                month=int(month_dir.name),
-                                day=int(day_dir.name)
-                            )
-
-                            if dir_date < cutoff_date:
-                                # Delete all videos in this directory
-                                for video_file in day_dir.glob("*.webm"):
-                                    try:
-                                        file_size = video_file.stat().st_size / 1024 / 1024
-                                        video_file.unlink()
-                                        deleted_count += 1
-                                        deleted_size_mb += file_size
-
-                                        # Remove from cache
-                                        request_id = video_file.stem
-                                        self.video_cache.pop(request_id, None)
-
-                                    except Exception as e:
-                                        errors.append(f"Failed to delete {video_file}: {str(e)}")
-
-                                # Try to remove empty directory
-                                try:
-                                    if not any(day_dir.iterdir()):
-                                        day_dir.rmdir()
-                                except:
-                                    pass
-
-                        except ValueError:
-                            # Invalid date directory
-                            continue
+                except Exception as e:
+                    errors.append(f"Failed to delete {video_file}: {str(e)}")
 
         except Exception as e:
             errors.append(f"Cleanup error: {str(e)}")
@@ -197,7 +160,7 @@ class VideoService:
             "deleted_size_mb": deleted_size_mb,
             "retention_days": retention_days,
             "cutoff_date": cutoff_date.isoformat(),
-            "errors": errors
+            "errors": errors,
         }
 
         if deleted_count > 0:
@@ -205,7 +168,7 @@ class VideoService:
                 "cleanup_completed",
                 request_id="bulk",
                 deleted_count=deleted_count,
-                deleted_size_mb=deleted_size_mb
+                deleted_size_mb=deleted_size_mb,
             )
 
         return result
@@ -218,7 +181,7 @@ class VideoService:
         newest_video = None
 
         try:
-            for video_file in self.base_video_path.rglob("*.webm"):
+            for video_file in self.base_video_path.glob("*.webm"):
                 if video_file.is_file():
                     stat = video_file.stat()
                     total_files += 1
@@ -239,36 +202,54 @@ class VideoService:
             "total_size_gb": round(total_size_mb / 1024, 2),
             "oldest_video": oldest_video.isoformat() if oldest_video else None,
             "newest_video": newest_video.isoformat() if newest_video else None,
-            "retention_days": settings.VIDEO_RETENTION_DAYS
+            "retention_days": settings.VIDEO_RETENTION_DAYS,
         }
 
-    async def list_videos_by_date(self, date: datetime, limit: int = 100) -> List[Dict[str, Any]]:
+    async def list_videos_by_date(
+        self, date: datetime, limit: int = 100
+    ) -> List[Dict[str, Any]]:
         """List videos for a specific date"""
         videos = []
-        date_dir = self.get_video_directory(date)
-
-        if not date_dir.exists():
-            return videos
 
         try:
-            video_files = list(date_dir.glob("*.webm"))[:limit]
+            # Filter videos by creation date
+            video_files = []
+            for video_file in self.base_video_path.glob("*.webm"):
+                try:
+                    stat = video_file.stat()
+                    file_date = datetime.fromtimestamp(stat.st_ctime).date()
+                    if file_date == date.date():
+                        video_files.append(video_file)
+                except Exception:
+                    continue
+
+            # Limit results
+            video_files = video_files[:limit]
 
             for video_file in video_files:
                 try:
                     stat = video_file.stat()
                     request_id = video_file.stem
 
-                    videos.append({
-                        "request_id": request_id,
-                        "file_path": str(video_file),
-                        "size_mb": round(stat.st_size / 1024 / 1024, 2),
-                        "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
-                        "width": settings.VIDEO_WIDTH,
-                        "height": settings.VIDEO_HEIGHT
-                    })
+                    videos.append(
+                        {
+                            "request_id": request_id,
+                            "file_path": str(video_file),
+                            "size_mb": round(stat.st_size / 1024 / 1024, 2),
+                            "created_at": datetime.fromtimestamp(
+                                stat.st_ctime
+                            ).isoformat(),
+                            "width": settings.VIDEO_WIDTH,
+                            "height": settings.VIDEO_HEIGHT,
+                        }
+                    )
 
                 except Exception as e:
-                    logger.error("Failed to process video file", file=str(video_file), error=str(e))
+                    logger.error(
+                        "Failed to process video file",
+                        file=str(video_file),
+                        error=str(e),
+                    )
 
         except Exception as e:
             logger.error("Failed to list videos", date=date.isoformat(), error=str(e))
@@ -277,17 +258,42 @@ class VideoService:
 
     async def get_recent_videos(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get most recent videos across all dates"""
-        all_videos = []
+        videos = []
 
-        # Search last 7 days
-        for days_back in range(8):
-            search_date = datetime.now() - timedelta(days=days_back)
-            date_videos = await self.list_videos_by_date(search_date, limit)
-            all_videos.extend(date_videos)
+        try:
+            video_files = list(self.base_video_path.glob("*.webm"))
+
+            for video_file in video_files:
+                try:
+                    stat = video_file.stat()
+                    request_id = video_file.stem
+
+                    videos.append(
+                        {
+                            "request_id": request_id,
+                            "file_path": str(video_file),
+                            "size_mb": round(stat.st_size / 1024 / 1024, 2),
+                            "created_at": datetime.fromtimestamp(
+                                stat.st_ctime
+                            ).isoformat(),
+                            "width": settings.VIDEO_WIDTH,
+                            "height": settings.VIDEO_HEIGHT,
+                        }
+                    )
+
+                except Exception as e:
+                    logger.error(
+                        "Failed to process video file",
+                        file=str(video_file),
+                        error=str(e),
+                    )
+
+        except Exception as e:
+            logger.error("Failed to get recent videos", error=str(e))
 
         # Sort by creation time and limit
-        all_videos.sort(key=lambda x: x["created_at"], reverse=True)
-        return all_videos[:limit]
+        videos.sort(key=lambda x: x["created_at"], reverse=True)
+        return videos[:limit]
 
     async def validate_video_access(self, request_id: str, api_key_id: int) -> bool:
         """Validate that API key can access specific video"""
@@ -296,7 +302,9 @@ class VideoService:
         video_info = await self.get_video_info(request_id)
         return video_info is not None
 
-    async def create_video_url(self, request_id: str, api_key: str, base_url: str = "http://localhost:8000") -> str:
+    async def create_video_url(
+        self, request_id: str, api_key: str, base_url: str = "http://localhost:8000"
+    ) -> str:
         """Create video access URL"""
         return f"{base_url}/video/{request_id}/{api_key}"
 
@@ -306,7 +314,9 @@ class VideoService:
 
         # Estimate daily growth (based on recent videos)
         today_videos = await self.list_videos_by_date(datetime.now())
-        yesterday_videos = await self.list_videos_by_date(datetime.now() - timedelta(days=1))
+        yesterday_videos = await self.list_videos_by_date(
+            datetime.now() - timedelta(days=1)
+        )
 
         daily_growth_mb = 0.0
         if today_videos:
@@ -324,7 +334,9 @@ class VideoService:
             "projected_30_days_mb": round(projected_30_days_mb, 2),
             "projected_90_days_mb": round(projected_90_days_mb, 2),
             "retention_days": settings.VIDEO_RETENTION_DAYS,
-            "max_retention_size_mb": round(daily_growth_mb * settings.VIDEO_RETENTION_DAYS, 2)
+            "max_retention_size_mb": round(
+                daily_growth_mb * settings.VIDEO_RETENTION_DAYS, 2
+            ),
         }
 
 

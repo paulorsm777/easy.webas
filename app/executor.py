@@ -12,7 +12,14 @@ from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 import structlog
 
 from app.config import settings
-from app.models import ScriptRequest, ScriptResponse, ExecutionStatus, BrowserInfo, ResourceUsage, ScriptAnalysis
+from app.models import (
+    ScriptRequest,
+    ScriptResponse,
+    ExecutionStatus,
+    BrowserInfo,
+    ResourceUsage,
+    ScriptAnalysis,
+)
 from app.database import record_execution, update_execution_status
 from app.logger import execution_logger
 from app.video_service import VideoService
@@ -79,24 +86,26 @@ class BrowserPool:
             except Exception as e:
                 logger.error("Failed to create browser", browser_index=i, error=str(e))
 
-        logger.info("Browser pool initialized",
-                   total_browsers=len(self.browsers),
-                   available_browsers=len(self.available_browsers))
+        logger.info(
+            "Browser pool initialized",
+            total_browsers=len(self.browsers),
+            available_browsers=len(self.available_browsers),
+        )
 
     async def _create_browser(self) -> Browser:
         """Create a new browser instance"""
         return await self.playwright.chromium.launch(
             headless=True,
             args=[
-                '--no-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--disable-web-security',
-                '--disable-features=VizDisplayCompositor',
-                '--disable-background-timer-throttling',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-renderer-backgrounding'
-            ]
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-web-security",
+                "--disable-features=VizDisplayCompositor",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+            ],
         )
 
     async def get_browser(self) -> Browser:
@@ -104,13 +113,17 @@ class BrowserPool:
         async with self._lock:
             if self.available_browsers:
                 browser = self.available_browsers.pop()
-                execution_logger.log_browser_event("acquired", browser_id=str(id(browser)))
+                execution_logger.log_browser_event(
+                    "acquired", browser_id=str(id(browser))
+                )
                 return browser
 
             # If no browsers available, create a new one
             try:
                 browser = await self._create_browser()
-                execution_logger.log_browser_event("created_on_demand", browser_id=str(id(browser)))
+                execution_logger.log_browser_event(
+                    "created_on_demand", browser_id=str(id(browser))
+                )
                 return browser
             except Exception as e:
                 logger.error("Failed to create browser on demand", error=str(e))
@@ -126,12 +139,16 @@ class BrowserPool:
                     # Replace with new browser
                     new_browser = await self._create_browser()
                     self.available_browsers.append(new_browser)
-                    execution_logger.log_browser_event("replaced",
-                                                     old_browser_id=str(id(browser)),
-                                                     new_browser_id=str(id(new_browser)))
+                    execution_logger.log_browser_event(
+                        "replaced",
+                        old_browser_id=str(id(browser)),
+                        new_browser_id=str(id(new_browser)),
+                    )
                 else:
                     self.available_browsers.append(browser)
-                    execution_logger.log_browser_event("returned", browser_id=str(id(browser)))
+                    execution_logger.log_browser_event(
+                        "returned", browser_id=str(id(browser))
+                    )
 
             except Exception as e:
                 logger.error("Failed to return browser", error=str(e))
@@ -154,7 +171,7 @@ class BrowserPool:
         return {
             "total_browsers": len(self.browsers),
             "available_browsers": len(self.available_browsers),
-            "healthy_browsers": healthy_browsers
+            "healthy_browsers": healthy_browsers,
         }
 
     async def close(self):
@@ -173,13 +190,30 @@ class ScriptValidator:
     """Validates scripts for security and performance"""
 
     FORBIDDEN_IMPORTS = {
-        'os', 'subprocess', 'sys', 'eval', 'exec', '__import__',
-        'open', 'file', 'input', 'raw_input', 'compile'
+        "os",
+        "subprocess",
+        "sys",
+        "eval",
+        "exec",
+        "__import__",
+        "open",
+        "file",
+        "input",
+        "raw_input",
+        "compile",
     }
 
     DANGEROUS_FUNCTIONS = {
-        'eval', 'exec', 'compile', 'getattr', 'setattr', 'delattr',
-        'globals', 'locals', 'vars', '__import__'
+        "eval",
+        "exec",
+        "compile",
+        "getattr",
+        "setattr",
+        "delattr",
+        "globals",
+        "locals",
+        "vars",
+        "__import__",
     }
 
     def validate(self, script: str) -> ScriptAnalysis:
@@ -210,16 +244,16 @@ class ScriptValidator:
                 # Detect operations
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                     method = node.func.attr
-                    if method in ['goto', 'navigate']:
-                        detected_operations.append('navigation')
-                    elif method in ['fill', 'type', 'press']:
-                        detected_operations.append('form_filling')
-                    elif method in ['click', 'tap']:
-                        detected_operations.append('interaction')
-                    elif method in ['wait_for_selector', 'wait_for']:
-                        detected_operations.append('waiting')
-                    elif method in ['screenshot', 'pdf']:
-                        detected_operations.append('capture')
+                    if method in ["goto", "navigate"]:
+                        detected_operations.append("navigation")
+                    elif method in ["fill", "type", "press"]:
+                        detected_operations.append("form_filling")
+                    elif method in ["click", "tap"]:
+                        detected_operations.append("interaction")
+                    elif method in ["wait_for_selector", "wait_for"]:
+                        detected_operations.append("waiting")
+                    elif method in ["screenshot", "pdf"]:
+                        detected_operations.append("capture")
 
             # Estimate complexity
             node_count = len(list(ast.walk(tree)))
@@ -234,7 +268,7 @@ class ScriptValidator:
         return ScriptAnalysis(
             estimated_complexity=complexity,
             detected_operations=list(set(detected_operations)),
-            security_warnings=warnings
+            security_warnings=warnings,
         )
 
 
@@ -245,7 +279,9 @@ class PlaywrightExecutor:
         self.browser_pool = BrowserPool(settings.BROWSER_POOL_SIZE)
         self.video_service = VideoService()
         self.validator = ScriptValidator()
-        self.execution_queue: asyncio.PriorityQueue = asyncio.PriorityQueue(maxsize=settings.MAX_QUEUE_SIZE)
+        self.execution_queue: asyncio.PriorityQueue = asyncio.PriorityQueue(
+            maxsize=settings.MAX_QUEUE_SIZE
+        )
         self.active_executions: Dict[str, asyncio.Task] = {}
         self.queue_position = 0
         self._running = False
@@ -262,9 +298,11 @@ class PlaywrightExecutor:
             task = asyncio.create_task(self._worker(f"worker_{i}"))
             self._worker_tasks.append(task)
 
-        logger.info("Playwright executor initialized",
-                   concurrent_workers=settings.MAX_CONCURRENT_EXECUTIONS,
-                   queue_size=settings.MAX_QUEUE_SIZE)
+        logger.info(
+            "Playwright executor initialized",
+            concurrent_workers=settings.MAX_CONCURRENT_EXECUTIONS,
+            queue_size=settings.MAX_QUEUE_SIZE,
+        )
 
     async def queue_script(self, request: ScriptRequest, api_key_id: int) -> str:
         """Queue a script for execution"""
@@ -275,9 +313,11 @@ class PlaywrightExecutor:
         script_analysis = self.validator.validate(request.script)
 
         if script_analysis.security_warnings:
-            logger.warning("Script has security warnings",
-                         request_id=request_id,
-                         warnings=script_analysis.security_warnings)
+            logger.warning(
+                "Script has security warnings",
+                request_id=request_id,
+                warnings=script_analysis.security_warnings,
+            )
 
         # Record in database
         await record_execution(
@@ -286,7 +326,7 @@ class PlaywrightExecutor:
             script_hash=script_hash,
             script_size=len(request.script),
             priority=request.priority,
-            tags=request.tags
+            tags=request.tags,
         )
 
         # Create queue item
@@ -300,21 +340,24 @@ class PlaywrightExecutor:
             tags=request.tags,
             user_agent=request.user_agent,
             created_at=time.time(),
-            position=self.queue_position
+            position=self.queue_position,
         )
 
         self.queue_position += 1
 
         try:
             await self.execution_queue.put(queue_item)
-            execution_logger.log_queue_event("item_added",
-                                            queue_size=self.execution_queue.qsize(),
-                                            active_executions=len(self.active_executions),
-                                            request_id=request_id,
-                                            priority=request.priority)
+            execution_logger.log_queue_event(
+                "item_added",
+                queue_size=self.execution_queue.qsize(),
+                active_executions=len(self.active_executions),
+                request_id=request_id,
+                priority=request.priority,
+            )
         except asyncio.QueueFull:
-            await update_execution_status(request_id, ExecutionStatus.FAILED,
-                                        error_message="Queue is full")
+            await update_execution_status(
+                request_id, ExecutionStatus.FAILED, error_message="Queue is full"
+            )
             raise Exception("Execution queue is full")
 
         return request_id
@@ -327,15 +370,16 @@ class PlaywrightExecutor:
             try:
                 # Get next item from queue
                 queue_item = await asyncio.wait_for(
-                    self.execution_queue.get(),
-                    timeout=1.0
+                    self.execution_queue.get(), timeout=1.0
                 )
 
-                execution_logger.log_queue_event("item_processing",
-                                                queue_size=self.execution_queue.qsize(),
-                                                active_executions=len(self.active_executions),
-                                                request_id=queue_item.request_id,
-                                                worker_id=worker_id)
+                execution_logger.log_queue_event(
+                    "item_processing",
+                    queue_size=self.execution_queue.qsize(),
+                    active_executions=len(self.active_executions),
+                    request_id=queue_item.request_id,
+                    worker_id=worker_id,
+                )
 
                 # Execute the script
                 task = asyncio.create_task(self._execute_script(queue_item))
@@ -365,13 +409,14 @@ class PlaywrightExecutor:
             script_hash=hashlib.sha256(queue_item.script.encode()).hexdigest(),
             queue_position=queue_item.position,
             priority=queue_item.priority,
-            tags=queue_item.tags
+            tags=queue_item.tags,
         )
 
         # Update status to running
         queue_wait_time = start_time - queue_item.created_at
-        await update_execution_status(request_id, ExecutionStatus.RUNNING,
-                                    queue_wait_time=queue_wait_time)
+        await update_execution_status(
+            request_id, ExecutionStatus.RUNNING, queue_wait_time=queue_wait_time
+        )
 
         browser = None
         context = None
@@ -384,9 +429,15 @@ class PlaywrightExecutor:
 
             # Create context with video recording
             context_options = {
-                "viewport": {"width": settings.VIDEO_WIDTH, "height": settings.VIDEO_HEIGHT},
-                "record_video_dir": f"./data/videos/{datetime.now().strftime('%Y/%m/%d')}",
-                "record_video_size": {"width": settings.VIDEO_WIDTH, "height": settings.VIDEO_HEIGHT}
+                "viewport": {
+                    "width": settings.VIDEO_WIDTH,
+                    "height": settings.VIDEO_HEIGHT,
+                },
+                "record_video_dir": "./data/videos",
+                "record_video_size": {
+                    "width": settings.VIDEO_WIDTH,
+                    "height": settings.VIDEO_HEIGHT,
+                },
             }
 
             if queue_item.user_agent:
@@ -402,8 +453,7 @@ class PlaywrightExecutor:
 
             # Execute script with timeout
             result = await asyncio.wait_for(
-                self._run_script(page, queue_item.script),
-                timeout=queue_item.timeout
+                self._run_script(page, queue_item.script), timeout=queue_item.timeout
             )
 
             # Calculate resource usage
@@ -422,7 +472,7 @@ class PlaywrightExecutor:
             browser_info = BrowserInfo(
                 version=browser.version,
                 user_agent=await page.evaluate("navigator.userAgent"),
-                viewport=f"{settings.VIDEO_WIDTH}x{settings.VIDEO_HEIGHT}"
+                viewport=f"{settings.VIDEO_WIDTH}x{settings.VIDEO_HEIGHT}",
             )
 
             # Update execution status
@@ -434,14 +484,14 @@ class PlaywrightExecutor:
                 video_path=video_path,
                 video_size_mb=video_size_mb,
                 memory_peak_mb=memory_peak_mb,
-                cpu_time_ms=cpu_time_ms
+                cpu_time_ms=cpu_time_ms,
             )
 
             execution_logger.log_execution_complete(
                 request_id=request_id,
                 success=True,
                 execution_time=execution_time,
-                result_size=len(str(result)) if result else 0
+                result_size=len(str(result)) if result else 0,
             )
 
         except asyncio.TimeoutError:
@@ -451,14 +501,14 @@ class PlaywrightExecutor:
                 status=ExecutionStatus.TIMEOUT,
                 error_message=f"Script timed out after {queue_item.timeout} seconds",
                 execution_time=execution_time,
-                queue_wait_time=queue_wait_time
+                queue_wait_time=queue_wait_time,
             )
 
             execution_logger.log_execution_complete(
                 request_id=request_id,
                 success=False,
                 execution_time=execution_time,
-                error="Timeout"
+                error="Timeout",
             )
 
         except Exception as e:
@@ -470,14 +520,14 @@ class PlaywrightExecutor:
                 status=ExecutionStatus.FAILED,
                 error_message=error_message,
                 execution_time=execution_time,
-                queue_wait_time=queue_wait_time
+                queue_wait_time=queue_wait_time,
             )
 
             execution_logger.log_execution_complete(
                 request_id=request_id,
                 success=False,
                 execution_time=execution_time,
-                error=error_message
+                error=error_message,
             )
 
         finally:
@@ -495,19 +545,19 @@ class PlaywrightExecutor:
         """Run the actual script in a secure namespace"""
         # Create secure namespace
         namespace = {
-            'page': page,
-            'asyncio': asyncio,
-            'json': json,
-            'datetime': datetime,
-            'time': time,
+            "page": page,
+            "asyncio": asyncio,
+            "json": json,
+            "datetime": datetime,
+            "time": time,
         }
 
         # Execute script
         exec(script, namespace)
 
         # Call main function if it exists
-        if 'main' in namespace and callable(namespace['main']):
-            return await namespace['main']()
+        if "main" in namespace and callable(namespace["main"]):
+            return await namespace["main"]()
 
         return None
 
@@ -515,7 +565,9 @@ class PlaywrightExecutor:
         """Get video path from context"""
         try:
             # Get video path from context
-            video_path = await context.close()  # This returns video path in some implementations
+            video_path = (
+                await context.close()
+            )  # This returns video path in some implementations
             return video_path
         except:
             return None
@@ -524,6 +576,7 @@ class PlaywrightExecutor:
         """Get video file size in MB"""
         try:
             import os
+
             size_bytes = os.path.getsize(video_path)
             return size_bytes / 1024 / 1024
         except:
@@ -537,15 +590,19 @@ class PlaywrightExecutor:
         # Extract all items to inspect them
         try:
             while not self.execution_queue.empty():
-                item = await asyncio.wait_for(self.execution_queue.get_nowait(), timeout=0.1)
+                item = await asyncio.wait_for(
+                    self.execution_queue.get_nowait(), timeout=0.1
+                )
                 temp_items.append(item)
-                queue_items.append({
-                    "request_id": item.request_id,
-                    "priority": item.priority,
-                    "created_at": item.created_at,
-                    "estimated_duration": item.estimated_duration,
-                    "tags": item.tags
-                })
+                queue_items.append(
+                    {
+                        "request_id": item.request_id,
+                        "priority": item.priority,
+                        "created_at": item.created_at,
+                        "estimated_duration": item.estimated_duration,
+                        "tags": item.tags,
+                    }
+                )
         except:
             pass
 
@@ -563,7 +620,7 @@ class PlaywrightExecutor:
             "total_queued": total_queued,
             "total_running": total_running,
             "estimated_wait_time": estimated_wait_time,
-            "queue_items": queue_items[:10]  # Show first 10 items
+            "queue_items": queue_items[:10],  # Show first 10 items
         }
 
     async def health_check(self) -> Dict[str, Any]:
@@ -576,12 +633,13 @@ class PlaywrightExecutor:
             "queue": {
                 "size": queue_status["total_queued"],
                 "active_executions": queue_status["total_running"],
-                "is_healthy": queue_status["total_queued"] < settings.MAX_QUEUE_SIZE * 0.8
+                "is_healthy": queue_status["total_queued"]
+                < settings.MAX_QUEUE_SIZE * 0.8,
             },
             "workers": {
                 "total": len(self._worker_tasks),
-                "running": sum(1 for task in self._worker_tasks if not task.done())
-            }
+                "running": sum(1 for task in self._worker_tasks if not task.done()),
+            },
         }
 
     async def shutdown(self):
@@ -595,8 +653,10 @@ class PlaywrightExecutor:
         if self.active_executions:
             try:
                 await asyncio.wait_for(
-                    asyncio.gather(*self.active_executions.values(), return_exceptions=True),
-                    timeout=30.0
+                    asyncio.gather(
+                        *self.active_executions.values(), return_exceptions=True
+                    ),
+                    timeout=30.0,
                 )
             except asyncio.TimeoutError:
                 logger.warning("Some executions didn't complete during shutdown")
